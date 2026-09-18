@@ -87,3 +87,238 @@ test("a Strict Mode cleanup followed by a new controller does not leak sockets o
   assert.equal(sockets[0].onopen, null);
   second.dispose();
 });
+
+test("ticket failure schedules a reconnect and a later close reports reconnecting", async () => {
+  const statuses = [];
+  const timers = [];
+  const connection = new LiveFeedConnection({
+    fetchTicket: async () => {
+      throw new Error("no ticket");
+    },
+    createSocket: () => {
+      throw new Error("should not open");
+    },
+    onStatus: (status) => statuses.push(status),
+    onMessage: () => {},
+    setTimer: (callback) => {
+      timers.push(callback);
+      return callback;
+    },
+    clearTimer: () => {},
+  });
+  connection.updateLocation({ lat: 40.7, lng: -73.9 });
+  connection.start();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(statuses, ["connecting", "reconnecting"]);
+  connection.updateRouteIds(["Q"]);
+  connection.updateRouteIds(["Q"]);
+  connection.dispose();
+  assert.equal(timers.length, 1);
+});
+
+test("open sockets report errors and ignore tiny location jitter", async () => {
+  const statuses = [];
+  const socket = {
+    readyState: 1,
+    send: (payload) => socket.sent.push(JSON.parse(payload)),
+    close() {},
+    onopen: null,
+    onclose: null,
+    onerror: null,
+    onmessage: null,
+    sent: [],
+  };
+  const connection = new LiveFeedConnection({
+    fetchTicket: async () => "ticket",
+    createSocket: () => socket,
+    onStatus: (status) => statuses.push(status),
+    onMessage: () => {},
+  });
+  connection.updateLocation({ lat: 40.7, lng: -73.9 });
+  connection.start();
+  await Promise.resolve();
+  socket.onopen();
+  socket.onerror();
+  connection.updateLocation({ lat: 40.7001, lng: -73.9001 });
+  assert.equal(statuses.includes("error"), true);
+  assert.equal(socket.sent.length, 1);
+  socket.onmessage?.({ data: "ping" });
+  connection.dispose();
+});
+
+test("start is a no-op without a location and scope is skipped while the socket is closed", async () => {
+  const socket = {
+    readyState: 0,
+    send: (payload) => socket.sent.push(JSON.parse(payload)),
+    close() {},
+    onopen: null,
+    onclose: null,
+    onerror: null,
+    onmessage: null,
+    sent: [],
+  };
+  const statuses = [];
+  const connection = new LiveFeedConnection({
+    fetchTicket: async () => "ticket",
+    createSocket: () => socket,
+    onStatus: (status) => statuses.push(status),
+    onMessage: () => {},
+  });
+  connection.start();
+  connection.updateRouteIds(["Q"]);
+  await Promise.resolve();
+  assert.deepEqual(statuses, []);
+  assert.equal(socket.sent.length, 0);
+  connection.updateLocation({ lat: 40.7, lng: -73.9 });
+  connection.start();
+  await Promise.resolve();
+  connection.updateRouteIds(["B"]);
+  assert.equal(socket.sent.length, 0);
+  socket.readyState = 1;
+  socket.onopen();
+  assert.equal(socket.sent[0].type, "location");
+  connection.updateRouteIds(["A"]);
+  assert.equal(socket.sent[1].type, "vehicle_scope");
+  assert.deepEqual(socket.sent[1].selected_route_ids, ["A"]);
+  connection.dispose();
+});
+
+test("a second start while connecting is ignored and dispose cancels an in-flight ticket", async () => {
+  const ticket = deferred();
+  const statuses = [];
+  const connection = new LiveFeedConnection({
+    fetchTicket: () => ticket.promise,
+    createSocket: () => {
+      throw new Error("should not open");
+    },
+    onStatus: (status) => statuses.push(status),
+    onMessage: () => {},
+  });
+  connection.updateLocation({ lat: 40.7, lng: -73.9 });
+  connection.start();
+  connection.start();
+  connection.dispose();
+  ticket.resolve("ticket");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(statuses, ["connecting"]);
+});
+
+test("close while a reconnect timer is pending does not stack timers", async () => {
+  const timers = [];
+  const socket = {
+    readyState: 1,
+    send() {},
+    close() {},
+    onopen: null,
+    onclose: null,
+    onerror: null,
+    onmessage: null,
+  };
+  const connection = new LiveFeedConnection({
+    fetchTicket: async () => "ticket",
+    createSocket: () => socket,
+    onStatus: () => {},
+    onMessage: () => {},
+    setTimer: (callback) => {
+      timers.push(callback);
+      return callback;
+    },
+    clearTimer: () => {},
+  });
+  connection.updateLocation({ lat: 40.7, lng: -73.9 });
+  connection.start();
+  await Promise.resolve();
+  socket.onclose();
+  socket.onclose();
+  assert.equal(timers.length, 1);
+  connection.dispose();
+});
+
+test("a second start after ticket failure does not stack reconnect timers", async () => {
+  const timers = [];
+  const connection = new LiveFeedConnection({
+    fetchTicket: async () => {
+      throw new Error("no ticket");
+    },
+    createSocket: () => {
+      throw new Error("should not open");
+    },
+    onStatus: () => {},
+    onMessage: () => {},
+    setTimer: (callback) => {
+      timers.push(callback);
+      return callback;
+    },
+    clearTimer: () => {},
+  });
+  connection.updateLocation({ lat: 40.7, lng: -73.9 });
+  connection.start();
+  await Promise.resolve();
+  await Promise.resolve();
+  connection.start();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(timers.length, 1);
+  connection.dispose();
+});
+
+test("reconnect uses the platform timer when no test timer is supplied", async () => {
+  const scheduled = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (callback) => {
+    scheduled.push(callback);
+    return 1;
+  };
+  const connection = new LiveFeedConnection({
+    fetchTicket: async () => {
+      throw new Error("no ticket");
+    },
+    createSocket: () => {
+      throw new Error("should not open");
+    },
+    onStatus: () => {},
+    onMessage: () => {},
+  });
+  try {
+    connection.updateLocation({ lat: 40.7, lng: -73.9 });
+    connection.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(scheduled.length, 1);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    connection.dispose();
+  }
+});
+
+test("a later reconnect after ticket failure reports reconnecting", async () => {
+  const statuses = [];
+  const timers = [];
+  const connection = new LiveFeedConnection({
+    fetchTicket: async () => {
+      throw new Error("no ticket");
+    },
+    createSocket: () => {
+      throw new Error("should not open");
+    },
+    onStatus: (status) => statuses.push(status),
+    onMessage: () => {},
+    setTimer: (callback) => {
+      timers.push(callback);
+      return callback;
+    },
+    clearTimer: () => {},
+  });
+  connection.updateLocation({ lat: 40.7, lng: -73.9 });
+  connection.start();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(timers.length, 1);
+  timers[0]();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(statuses.filter((status) => status === "reconnecting").length >= 2, true);
+  connection.dispose();
+});

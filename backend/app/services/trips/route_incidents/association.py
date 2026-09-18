@@ -7,10 +7,10 @@ the candidate-scoped association returned by the local cached-511NY matcher.
 
 from __future__ import annotations
 
-from math import isfinite
 import re
-from typing import Any, Mapping
-
+from collections.abc import Mapping
+from math import isfinite
+from typing import Any
 
 MAX_ASSOCIATED_CANDIDATES = 12
 MAX_ASSOCIATED_MODES = 4
@@ -89,41 +89,52 @@ def _stop_association(value: object) -> dict[str, Any] | None:
     return result or None
 
 
+def _relevance_by_mode(value: object) -> dict[str, str] | None:
+    if not isinstance(value, Mapping):
+        return None
+    normalized = {
+        mode: _text(level, 80)
+        for mode, level in value.items()
+        if isinstance(mode, str)
+        and mode in ALLOWED_ASSOCIATED_MODES
+        and _text(level, 80) in ALLOWED_RELEVANCE
+    }
+    return dict(sorted(normalized.items())) if normalized else None
+
+
+def _nearby_stops(value: object) -> list[dict[str, Any]] | None:
+    if not isinstance(value, list):
+        return None
+    stops = [
+        stop
+        for item in value[:MAX_NEARBY_STOP_ASSOCIATIONS]
+        if (stop := _stop_association(item)) is not None
+    ]
+    return stops or None
+
+
 def normalize_matcher_association(value: Mapping[str, Any]) -> dict[str, Any]:
     """Return only bounded data produced by the local candidate matcher."""
-    result: dict[str, Any] = {}
-    candidate_ids = _candidate_ids(value.get("affected_candidate_route_ids"))
-    if candidate_ids:
-        result["affected_candidate_route_ids"] = candidate_ids
-    modes = _bounded_strings(value.get("affected_modes"), allowed=ALLOWED_ASSOCIATED_MODES, limit=MAX_ASSOCIATED_MODES)
-    if modes:
-        result["affected_modes"] = modes
-    relevance = value.get("relevance_by_mode")
-    if isinstance(relevance, Mapping):
-        normalized_relevance = {
-            mode: _text(level, 80)
-            for mode, level in relevance.items()
-            if isinstance(mode, str)
-            and mode in ALLOWED_ASSOCIATED_MODES
-            and _text(level, 80) in ALLOWED_RELEVANCE
-        }
-        if normalized_relevance:
-            result["relevance_by_mode"] = dict(sorted(normalized_relevance.items()))
-    impact_scope = _text(value.get("impact_scope"), 40)
-    if impact_scope in ALLOWED_IMPACT_SCOPES:
-        result["impact_scope"] = impact_scope
-    nearest_stop = _stop_association(value.get("nearest_stop"))
-    if nearest_stop:
-        result["nearest_stop"] = nearest_stop
-    nearby_stops = value.get("nearby_stops")
-    if isinstance(nearby_stops, list):
-        normalized_stops = [
-            stop for item in nearby_stops[:MAX_NEARBY_STOP_ASSOCIATIONS]
-            if (stop := _stop_association(item)) is not None
-        ]
-        if normalized_stops:
-            result["nearby_stops"] = normalized_stops
-    return result
+    scope = _text(value.get("impact_scope"), 40)
+    fields = (
+        (
+            "affected_candidate_route_ids",
+            _candidate_ids(value.get("affected_candidate_route_ids")),
+        ),
+        (
+            "affected_modes",
+            _bounded_strings(
+                value.get("affected_modes"),
+                allowed=ALLOWED_ASSOCIATED_MODES,
+                limit=MAX_ASSOCIATED_MODES,
+            ),
+        ),
+        ("relevance_by_mode", _relevance_by_mode(value.get("relevance_by_mode"))),
+        ("impact_scope", scope if scope in ALLOWED_IMPACT_SCOPES else None),
+        ("nearest_stop", _stop_association(value.get("nearest_stop"))),
+        ("nearby_stops", _nearby_stops(value.get("nearby_stops"))),
+    )
+    return {key: item for key, item in fields if item}
 
 
 def attach_verified_match_association(

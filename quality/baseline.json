@@ -1,0 +1,546 @@
+{
+  "version": 2,
+  "max_cyclomatic_complexity": 10,
+  "max_python_cyclomatic_complexity": 10,
+  "max_frontend_cyclomatic_complexity": 12,
+  "max_cognitive_complexity": 10,
+  "formula": "CC^2 * (1 - coverage)^3 + CC",
+  "python_cc_source": "radon",
+  "python_lint_source": "ruff C901, PLR0912, PLR0915",
+  "python_cognitive_source": "complexipy",
+  "crap_policy": "regression signal for baseline entries; no absolute ceiling",
+  "identity": "language:file:qualified_name#source_order",
+  "entries": [
+    {
+      "id": "python:backend/app/routers/live_feed/ticket.py:verify_ticket#0",
+      "language": "Python",
+      "file": "backend/app/routers/live_feed/ticket.py",
+      "function": "verify_ticket",
+      "complexity": 11,
+      "crap": 11.268513,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/routers/trips.py:_enrichment_steps_are_bounded#0",
+      "language": "Python",
+      "file": "backend/app/routers/trips.py",
+      "function": "_enrichment_steps_are_bounded",
+      "complexity": 11,
+      "crap": 11.121,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/discovery_store.py:_sanitized_search_scope#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/discovery_store.py",
+      "function": "_sanitized_search_scope",
+      "complexity": 11,
+      "crap": 11.66497,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/discovery_store.py:load_discovery_set#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/discovery_store.py",
+      "function": "load_discovery_set",
+      "complexity": 11,
+      "crap": 12.576226,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/model/stream.py:_stream_provider_events#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/model/stream.py",
+      "function": "_stream_provider_events",
+      "complexity": 12,
+      "crap": 12.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/presented_entity_registry.py:record#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/presented_entity_registry.py",
+      "function": "record",
+      "complexity": 12,
+      "crap": 12.666667,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/presented_entity_registry.py:resolve#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/presented_entity_registry.py",
+      "function": "resolve",
+      "complexity": 11,
+      "crap": 11.015125,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/profile.py:_validated_preferences#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/profile.py",
+      "function": "_validated_preferences",
+      "complexity": 11,
+      "crap": 11.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/profile.py:normalize_place#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/profile.py",
+      "function": "normalize_place",
+      "complexity": 12,
+      "crap": 13.152,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/session.py:add_pending_continuation#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/session.py",
+      "function": "add_pending_continuation",
+      "complexity": 11,
+      "crap": 11.035852,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tool_input_policy.py:goal_error#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tool_input_policy.py",
+      "function": "goal_error",
+      "complexity": 12,
+      "crap": 12.073728,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/location_resolution.py:_resolved_discovery_record#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/location_resolution.py",
+      "function": "_resolved_discovery_record",
+      "complexity": 12,
+      "crap": 12.197531,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/location_resolution.py:resolve_discovery_place#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/location_resolution.py",
+      "function": "resolve_discovery_place",
+      "complexity": 12,
+      "crap": 12.341333,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/places/damn_lines.py:_read_current#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/places/damn_lines.py",
+      "function": "_read_current",
+      "complexity": 12,
+      "crap": 12.949219,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/places/present_places.py:_owned_discovery#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/places/present_places.py",
+      "function": "_owned_discovery",
+      "complexity": 12,
+      "crap": 12.058528,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/places/present_places.py:try_deterministic_fallback#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/places/present_places.py",
+      "function": "try_deterministic_fallback",
+      "complexity": 12,
+      "crap": 12.035156,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/prepare_route_branches.py:_validated_branch_ids#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/prepare_route_branches.py",
+      "function": "_validated_branch_ids",
+      "complexity": 11,
+      "crap": 12.576226,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/prepare_route_branches.py:prepare_destination_branches#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/prepare_route_branches.py",
+      "function": "prepare_destination_branches",
+      "complexity": 11,
+      "crap": 11.015125,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/prepare_route_options.py:_resolve_destination_state#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/prepare_route_options.py",
+      "function": "_resolve_destination_state",
+      "complexity": 11,
+      "crap": 11.035852,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/present_route.py:_route_reason_error#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/present_route.py",
+      "function": "_route_reason_error",
+      "complexity": 11,
+      "crap": 11.236328,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/present_route.py:canonical_facts_with_fallback#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/present_route.py",
+      "function": "canonical_facts_with_fallback",
+      "complexity": 11,
+      "crap": 11.020748,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/present_route_commit.py:_candidate_discovery_place_id#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/present_route_commit.py",
+      "function": "_candidate_discovery_place_id",
+      "complexity": 11,
+      "crap": 11.797607,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/present_route_state.py:_load_canonical_candidate#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/present_route_state.py",
+      "function": "_load_canonical_candidate",
+      "complexity": 12,
+      "crap": 12.052478,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/route_projection.py:_boarding_inputs#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/route_projection.py",
+      "function": "_boarding_inputs",
+      "complexity": 12,
+      "crap": 12.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/route_projection.py:_emit_recommended_card#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/route_projection.py",
+      "function": "_emit_recommended_card",
+      "complexity": 11,
+      "crap": 11.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/route/route_projection.py:_validated_pattern_context#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/route/route_projection.py",
+      "function": "_validated_pattern_context",
+      "complexity": 12,
+      "crap": 12.524351,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/check_transit.py:arrivals#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/check_transit.py",
+      "function": "arrivals",
+      "complexity": 11,
+      "crap": 11.560185,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/check_transit.py:execute#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/check_transit.py",
+      "function": "execute",
+      "complexity": 12,
+      "crap": 12.010417,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/check_transit.py:grounding_succeeded#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/check_transit.py",
+      "function": "grounding_succeeded",
+      "complexity": 11,
+      "crap": 11.044096,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/evidence_binding.py:_incident_projection#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/evidence_binding.py",
+      "function": "_incident_projection",
+      "complexity": 12,
+      "crap": 12.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:safe_accessibility#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
+      "function": "safe_accessibility",
+      "complexity": 11,
+      "crap": 11.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/evidence_projection.py:safe_unconfirmed_signal#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/evidence_projection.py",
+      "function": "safe_unconfirmed_signal",
+      "complexity": 11,
+      "crap": 11.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/lookup_arrivals.py:execute#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/lookup_arrivals.py",
+      "function": "execute",
+      "complexity": 12,
+      "crap": 17.333333,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/lookup_arrivals_bus.py:execute#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/lookup_arrivals_bus.py",
+      "function": "execute",
+      "complexity": 12,
+      "crap": 12.666667,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/lookup_facts.py:_find_section#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/lookup_facts.py",
+      "function": "_find_section",
+      "complexity": 12,
+      "crap": 12.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/transit_snapshot.py:_signal_rows#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/transit_snapshot.py",
+      "function": "_signal_rows",
+      "complexity": 11,
+      "crap": 11.35277,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/tools/transit/transit_snapshot.py:collect_service_status#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/tools/transit/transit_snapshot.py",
+      "function": "collect_service_status",
+      "complexity": 11,
+      "crap": 11.968,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/turn/completion.py:apply_completion#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/turn/completion.py",
+      "function": "apply_completion",
+      "complexity": 12,
+      "crap": 12.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/turn/contract.py:TurnContract._status_for#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/turn/contract.py",
+      "function": "TurnContract._status_for",
+      "complexity": 11,
+      "crap": 11.797607,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/turn/stream.py:_finish_model_iteration#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/turn/stream.py",
+      "function": "_finish_model_iteration",
+      "complexity": 11,
+      "crap": 11.020748,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/turn/stream.py:resolve_model_iteration#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/turn/stream.py",
+      "function": "resolve_model_iteration",
+      "complexity": 11,
+      "crap": 11.35277,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/agent/turn/tool_round.py:_ToolRoundExecution._validate_calls#0",
+      "language": "Python",
+      "file": "backend/app/services/agent/turn/tool_round.py",
+      "function": "_ToolRoundExecution._validate_calls",
+      "complexity": 11,
+      "crap": 11.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/incidents/normalization.py:normalize_incident_record#0",
+      "language": "Python",
+      "file": "backend/app/services/incidents/normalization.py",
+      "function": "normalize_incident_record",
+      "complexity": 11,
+      "crap": 11.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/incidents/ny511.py:NY511Client.fetch_events#0",
+      "language": "Python",
+      "file": "backend/app/services/incidents/ny511.py",
+      "function": "NY511Client.fetch_events",
+      "complexity": 11,
+      "crap": 11.017641,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/incidents/scout_normalization.py:_accepted_x_claim#0",
+      "language": "Python",
+      "file": "backend/app/services/incidents/scout_normalization.py",
+      "function": "_accepted_x_claim",
+      "complexity": 12,
+      "crap": 12.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/live_feed/snapshot.py:_derive_live_network_status#0",
+      "language": "Python",
+      "file": "backend/app/services/live_feed/snapshot.py",
+      "function": "_derive_live_network_status",
+      "complexity": 12,
+      "crap": 12.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/live_feed/vehicle_enrichment.py:_attach_trip_segment#0",
+      "language": "Python",
+      "file": "backend/app/services/live_feed/vehicle_enrichment.py",
+      "function": "_attach_trip_segment",
+      "complexity": 11,
+      "crap": 11.004961,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/crowds/event_provider.py:_events_from_payload#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/crowds/event_provider.py",
+      "function": "_events_from_payload",
+      "complexity": 11,
+      "crap": 11.286815,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/crowds/event_provider.py:lookup_events#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/crowds/event_provider.py",
+      "function": "lookup_events",
+      "complexity": 12,
+      "crap": 12.005333,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/crowds/search_provider.py:run_search#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/crowds/search_provider.py",
+      "function": "run_search",
+      "complexity": 11,
+      "crap": 12.243117,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/location.py:resolve_named_place#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/location.py",
+      "function": "resolve_named_place",
+      "complexity": 11,
+      "crap": 18.744,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/preparation/evidence.py:_merge_envelope_rows#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/preparation/evidence.py",
+      "function": "_merge_envelope_rows",
+      "complexity": 12,
+      "crap": 12.28125,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/preparation/evidence.py:_vehicle_signal_direction_matches#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/preparation/evidence.py",
+      "function": "_vehicle_signal_direction_matches",
+      "complexity": 12,
+      "crap": 12.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/preparation/input.py:prepare_structural_candidates#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/preparation/input.py",
+      "function": "prepare_structural_candidates",
+      "complexity": 11,
+      "crap": 11.121,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/route_incidents/association.py:_stop_association#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/route_incidents/association.py",
+      "function": "_stop_association",
+      "complexity": 12,
+      "crap": 12.018,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/scoring.py:_vehicle_signal_hits#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/scoring.py",
+      "function": "_vehicle_signal_hits",
+      "complexity": 11,
+      "crap": 11.0,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/scoring.py:alert_penalty_from_score#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/scoring.py",
+      "function": "alert_penalty_from_score",
+      "complexity": 11,
+      "crap": 13.454545,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/selection_decision.py:_add_crowd_reason#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/selection_decision.py",
+      "function": "_add_crowd_reason",
+      "complexity": 12,
+      "crap": 12.666667,
+      "coverage_status": "measured"
+    },
+    {
+      "id": "python:backend/app/services/trips/selection_decision.py:_dominates_for_preference#0",
+      "language": "Python",
+      "file": "backend/app/services/trips/selection_decision.py",
+      "function": "_dominates_for_preference",
+      "complexity": 11,
+      "crap": 11.0,
+      "coverage_status": "measured"
+    }
+  ]
+}

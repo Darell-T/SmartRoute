@@ -5,10 +5,11 @@ import secrets
 import unittest
 from unittest.mock import patch
 
+from app.services import cache
 from app.services.agent import events as agent_events
 from app.services.agent import session as session_module
 from app.services.agent.tools import ToolResult
-from app.services import cache
+
 from tests._fake_anthropic import reload_agent_loop_module
 
 
@@ -103,18 +104,19 @@ class ModelLedGoalLoopTests(unittest.IsolatedAsyncioTestCase):
         self.loop.client.messages.calls = []
         _session_id, session = session_module.new_session()
         trace = self.loop.TurnTrace()
-        events = []
         with patch.object(self.loop, "TOOL_REGISTRY", registry):
-            async for event in self.loop.run_agent_turn(
-                session=session,
-                session_id=secrets.token_hex(8),
-                turn_id="turn",
-                message=message,
-                now_et="2026-08-15T12:00:00-04:00",
-                origin={"lat": 40.65, "lng": -73.95},
-                trace=trace,
-            ):
-                events.append(event)
+            events = [
+                event
+                async for event in self.loop.run_agent_turn(
+                    session=session,
+                    session_id=secrets.token_hex(8),
+                    turn_id="turn",
+                    message=message,
+                    now_et="2026-08-15T12:00:00-04:00",
+                    origin={"lat": 40.65, "lng": -73.95},
+                    trace=trace,
+                )
+            ]
         return events, trace
 
     async def test_compound_discovery_and_route_cannot_stop_after_places(self) -> None:
@@ -180,18 +182,10 @@ class ModelLedGoalLoopTests(unittest.IsolatedAsyncioTestCase):
             "Find a good ramen spot and route me there by subway.",
         )
 
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            [
-                "declare_goals",
-                "discover_places",
-                "prepare_route_options",
-                "present_route",
-            ],
-        )
-        self.assertEqual(trace.model_call_count, 3)
-        self.assertTrue(any(event.type == "route_card" for event in events))
-        self.assertEqual(events[-1].stop_reason, "end_turn")
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "discover_places", "prepare_route_options", "present_route"]
+        assert trace.model_call_count == 3
+        assert any(event.type == "route_card" for event in events)
+        assert events[-1].stop_reason == "end_turn"
 
     async def test_service_status_uses_canonical_transit_presenter(self) -> None:
         rounds = [
@@ -240,15 +234,9 @@ class ModelLedGoalLoopTests(unittest.IsolatedAsyncioTestCase):
             "Does the downtown Q have any stalled trains currently?",
         )
 
-        self.assertEqual(
-            [name for name, _tool_input in trace.tool_calls],
-            ["declare_goals", "check_transit", "present_transit"],
-        )
-        self.assertEqual(trace.model_call_count, 2)
-        self.assertIn(
-            "confirmed Q service alert",
-            "".join(event.text for event in events if event.type == "token"),
-        )
+        assert [name for name, _tool_input in trace.tool_calls] == ["declare_goals", "check_transit", "present_transit"]
+        assert trace.model_call_count == 2
+        assert "confirmed Q service alert" in "".join(event.text for event in events if event.type == "token")
 
 
 if __name__ == "__main__":

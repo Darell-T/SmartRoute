@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
-from typing import Any, Iterable, Mapping
+from typing import Any
 from zoneinfo import ZoneInfo
 
 try:
     from xai_sdk import AsyncClient
     from xai_sdk.chat import system, user
     from xai_sdk.tools import get_tool_call_type, web_search, x_search
-except Exception:  # Optional provider; route planning must remain available.
+except Exception:  # noqa: BLE001 optional SDK import faults leave planning available
     AsyncClient = None
     system = user = get_tool_call_type = web_search = x_search = None
 
@@ -22,7 +23,6 @@ from app.services.trips.crowds.search_normalization import (
     parse_json,
     response_text,
 )
-
 
 _MODEL = os.getenv("XAI_CROWD_MODEL", "grok-4-1-fast-reasoning")
 _TIMEOUT_S = min(6.0, max(1.0, float(os.getenv("CROWD_SEARCH_TIMEOUT_S", "6"))))
@@ -80,25 +80,51 @@ def _failure_result(
     return result
 
 
+def _parse_tool_call_source(call: object) -> str | None:
+    try:
+        call_type = get_tool_call_type(call) if get_tool_call_type else ""
+    except Exception:  # noqa: BLE001 SDK call-type faults stay unused
+        return None
+    if call_type == "web_search_tool":
+        return "web_search"
+    if call_type == "x_search_tool":
+        return "x_search"
+    return None
+
+
+def _parse_usage_sources(item: object) -> set[str]:
+    source = str(item).casefold()
+    completed: set[str] = set()
+    if "web_search" in source:
+        completed.add("web_search")
+    if "x_search" in source:
+        completed.add("x_search")
+    return completed
+
+
 def _completed_sources(response: object) -> set[str]:
     completed: set[str] = set()
     for call in getattr(response, "tool_calls", ()) or ():
-        try:
-            call_type = get_tool_call_type(call) if get_tool_call_type else ""
-        except Exception:
-            call_type = ""
-        if call_type == "web_search_tool":
-            completed.add("web_search")
-        elif call_type == "x_search_tool":
-            completed.add("x_search")
+        source = _parse_tool_call_source(call)
+        if source:
+            completed.add(source)
     usage = getattr(response, "server_side_tool_usage", ()) or ()
-    for item in usage if isinstance(usage, (list, tuple, set)) else (usage,):
-        source = str(item).casefold()
-        if "web_search" in source:
-            completed.add("web_search")
-        if "x_search" in source:
-            completed.add("x_search")
+    items = usage if isinstance(usage, (list, tuple, set)) else (usage,)
+    for item in items:
+        completed.update(_parse_usage_sources(item))
     return completed
+
+
+def _http_url(value: object) -> str | None:
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, Mapping):
+        raw = value.get("url") or value.get("href")
+        text = raw if isinstance(raw, str) else ""
+    else:
+        raw = getattr(value, "url", None) or getattr(value, "href", None)
+        text = raw if isinstance(raw, str) else ""
+    return text if text.startswith(("https://", "http://")) else None
 
 
 def _citation_urls(response: object) -> set[str]:
@@ -107,15 +133,9 @@ def _citation_urls(response: object) -> set[str]:
         *(getattr(response, "citations", ()) or ()),
         *(getattr(response, "inline_citations", ()) or ()),
     ):
-        if isinstance(value, str) and value.startswith(("https://", "http://")):
-            citations.add(value)
-            continue
-        if isinstance(value, Mapping):
-            value = value.get("url") or value.get("href")
-        else:
-            value = getattr(value, "url", None) or getattr(value, "href", None)
-        if isinstance(value, str) and value.startswith(("https://", "http://")):
-            citations.add(value)
+        url = _http_url(value)
+        if url:
+            citations.add(url)
     return citations
 
 
@@ -164,7 +184,7 @@ async def run_search(
         response = await chat.sample()
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 crowd-search SDK faults stay unavailable
         return _failure_result(phase="parallel_request", error=exc)
 
     completed = _completed_sources(response)

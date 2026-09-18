@@ -6,10 +6,9 @@ from unittest.mock import patch
 
 from app.services.trips.location import known_place, resolve_named_place
 
-
 PENN_LABELS = (
     "34 St-Penn Station",
-    "34 St–Penn Station",
+    "34 St\u2013Penn Station",
     "34 St Penn Station",
     "34th Penn Station",
     "34th Street-Penn Station",
@@ -28,11 +27,11 @@ class PennStationAliasesTests(unittest.IsolatedAsyncioTestCase):
                         label, SimpleNamespace(origin=None),
                         missing_location_message="Origin required",
                     )
-                    self.assertIsNone(error)
-                    self.assertEqual(place.name, "Penn Station")
-                    self.assertEqual((place.latitude, place.longitude), (40.7506, -73.9935))
+                    assert error is None
+                    assert place.name == "Penn Station"
+                    assert (place.latitude, place.longitude) == (40.7506, -73.9935)
 
     def test_unrelated_stations_are_not_penn_aliases(self):
         for label in ("36 St", "Newark Penn Station", "34 St-Herald Sq"):
             with self.subTest(label=label):
-                self.assertIsNone(known_place(label))
+                assert known_place(label) is None

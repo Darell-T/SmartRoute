@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any, Iterable, Mapping
+from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.services import cache
 from app.services.trips.crowds.hotspots import HotspotHit
 from app.services.trips.crowds.search_provider import (
     run_search as _run_search,
 )
-from app.services import cache
 
 _CACHE_TTL_S = 300
 _CACHE_PREFIX = "agent:crowd-search:"

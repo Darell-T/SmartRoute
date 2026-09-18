@@ -6,19 +6,26 @@
 // projection it is handed (callers pass pre-sorted route ids), so this module
 // has no value dependency back on index.ts.
 
-import type { Feature } from "../types.ts";
-import type { StationFeature, Projection } from "./types.ts";
+import {
+  STATION_DEBUG_MARKERS,
+  type AmbiguousDebugFeature,
+  type Projection,
+  type RawStationDebugFeature,
+  type RejectedDebugFeature,
+  type SnapDebugFeature,
+  type StationFeature,
+} from "./types.ts";
 
 // Raw station point: the station's own GeoJSON coordinate, before any snapping.
 // Lets you eyeball input stations against the snapped anchors on the same map.
 export function rawStationDebugFeature(
   station: StationFeature,
   routeIds: string[],
-): Feature {
+): RawStationDebugFeature {
   return {
     type: "Feature",
     properties: {
-      marker_type: "raw_station_point",
+      marker_type: STATION_DEBUG_MARKERS.raw,
       station_id: String(
         station.properties?.station_id ?? station.id ?? "",
       ),
@@ -31,11 +38,14 @@ export function rawStationDebugFeature(
 
 // Snap line: a segment from the station to where one route's lane was snapped.
 // Shows which visual lane each route attached to and how far the snap reached.
-export function snapDebugFeature(station: StationFeature, projection: Projection): Feature {
+export function snapDebugFeature(
+  station: StationFeature,
+  projection: Projection,
+): SnapDebugFeature {
   return {
     type: "Feature",
     properties: {
-      marker_type: "station_snap",
+      marker_type: STATION_DEBUG_MARKERS.snap,
       station_id: String(
         station.properties?.station_id ?? station.id ?? "",
       ),
@@ -54,11 +64,14 @@ export function snapDebugFeature(station: StationFeature, projection: Projection
 
 // Rejected-snap line: a candidate snap that exceeded the distance threshold.
 // Surfaces the near-misses that were discarded, so an over-tight gate is visible.
-export function rejectedDebugFeature(station: StationFeature, projection: Projection): Feature {
+export function rejectedDebugFeature(
+  station: StationFeature,
+  projection: Projection,
+): RejectedDebugFeature {
   return {
     type: "Feature",
     properties: {
-      marker_type: "station_snap_rejected",
+      marker_type: STATION_DEBUG_MARKERS.rejected,
       station_id: String(
         station.properties?.station_id ?? station.id ?? "",
       ),
@@ -77,16 +90,21 @@ export function rejectedDebugFeature(station: StationFeature, projection: Projec
 
 // Ambiguous station marker: a station that produced no valid projection at all.
 // Flags stations the snapper could not resolve, with candidate counts for triage.
+export type AmbiguousDebugExtra = {
+  debug_candidate_count?: number;
+  debug_rejected_candidate_count?: number;
+};
+
 export function ambiguousDebugFeature(
   station: StationFeature,
   routeIds: string[],
   reason: string,
-  extra: Record<string, any> = {},
-): Feature {
+  extra: AmbiguousDebugExtra = {},
+): AmbiguousDebugFeature {
   return {
     type: "Feature",
     properties: {
-      marker_type: "station_snap_ambiguous",
+      marker_type: STATION_DEBUG_MARKERS.ambiguous,
       station_id: String(
         station.properties?.station_id ?? station.id ?? "",
       ),

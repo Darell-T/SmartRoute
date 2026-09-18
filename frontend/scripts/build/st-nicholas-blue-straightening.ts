@@ -1,4 +1,4 @@
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { Feature, FeatureProps, LineStringGeometry, Position } from "./types.ts";
 
 type Vector = [number, number];
 
@@ -9,21 +9,7 @@ type BBox = {
   maxLat: number;
 };
 
-type StNicholasProperties = {
-  bundle_id?: unknown;
-  corridor_id?: unknown;
-  color?: unknown;
-  route_id?: unknown;
-  route_ids?: unknown;
-  color_route_ids?: unknown;
-  st_nicholas_blue_straightened?: boolean;
-  st_nicholas_blue_endpoint_clusters?: number;
-  st_nicholas_blue_max_perp_before_m?: number;
-  st_nicholas_blue_max_perp_after_m?: number;
-  [key: string]: unknown;
-};
-
-type StNicholasFeature = Feature<LineStringGeometry, StNicholasProperties>;
+type StNicholasFeature = Feature<LineStringGeometry, FeatureProps>;
 
 type Axis = {
   centroid: Vector;
@@ -494,10 +480,6 @@ function findProjectionRanges(coords: Position[], bbox: BBox, rangeExtensionM: n
   return merged;
 }
 
-function isIndexInRanges(index: number, ranges: ProjectionRange[]): boolean {
-  return ranges.some((range) => index >= range.start && index <= range.end);
-}
-
 function snapEndpointClusters(
   features: StNicholasFeature[],
   targetIndexes: number[],
@@ -550,24 +532,52 @@ function snapEndpointClusters(
   return snappedClusters;
 }
 
-export function applyStNicholasBlueStraightening(
-  features: StNicholasFeature[],
-  options: StNicholasOptions = {},
-): StNicholasResult {
+type ResolvedStNicholasOptions = {
+  bbox: BBox;
+  marginM: number;
+  endpointSnapM: number;
+  rangeExtensionM: number;
+  sampleSpacingM: number;
+  maxReferenceDistanceM: number;
+  spineCoordinates: Position[] | null;
+};
+
+type StNicholasTargets = {
+  targetIndexes: number[];
+  points: Position[];
+  referencePoints: Position[];
+  projectionRangesByIndex: Map<number, ProjectionRange[]>;
+};
+
+type StNicholasGuide = {
+  stationSpine: PolylineSpine | null;
+  axis: Axis;
+  selectedOffsetCount: number;
+  referenceAxis: Axis | null;
+};
+
+function resolveStNicholasOptions(options: StNicholasOptions): ResolvedStNicholasOptions {
   const bbox = options.bbox ?? DEFAULT_BBOX;
-  const marginM = options.marginM ?? 25;
-  const endpointSnapM = options.endpointSnapM ?? 18;
-  const rangeExtensionM = options.rangeExtensionM ?? 35;
-  const sampleSpacingM = options.sampleSpacingM ?? 8;
-  const maxReferenceDistanceM = options.maxReferenceDistanceM ?? 150;
-  const spineCoordinates = options.spineCoordinates
-    ?? (options.bbox ? null : DEFAULT_ST_NICHOLAS_BLUE_SPINE);
-  const effectiveBBox = expandBBox(bbox, marginM);
+  return {
+    bbox,
+    marginM: options.marginM ?? 25,
+    endpointSnapM: options.endpointSnapM ?? 18,
+    rangeExtensionM: options.rangeExtensionM ?? 35,
+    sampleSpacingM: options.sampleSpacingM ?? 8,
+    maxReferenceDistanceM: options.maxReferenceDistanceM ?? 150,
+    spineCoordinates: options.spineCoordinates ?? (options.bbox ? null : DEFAULT_ST_NICHOLAS_BLUE_SPINE),
+  };
+}
+
+function collectStNicholasTargets(
+  features: StNicholasFeature[],
+  effectiveBBox: BBox,
+  rangeExtensionM: number,
+): StNicholasTargets {
   const targetIndexes: number[] = [];
   const points: Position[] = [];
   const referencePoints: Position[] = [];
   const projectionRangesByIndex = new Map<number, ProjectionRange[]>();
-
   for (let index = 0; index < features.length; index += 1) {
     const feature = features[index];
     if (isReferenceOrangeFeature(feature, effectiveBBox)) {
@@ -577,41 +587,48 @@ export function applyStNicholasBlueStraightening(
     }
     if (!isTargetBlueFeature(feature, effectiveBBox)) continue;
     targetIndexes.push(index);
-    const projectionRanges = findProjectionRanges(feature.geometry.coordinates, effectiveBBox, rangeExtensionM);
-    projectionRangesByIndex.set(index, projectionRanges);
+    projectionRangesByIndex.set(
+      index,
+      findProjectionRanges(feature.geometry.coordinates, effectiveBBox, rangeExtensionM),
+    );
     for (const coord of feature.geometry.coordinates) {
       if (inBBox(coord, effectiveBBox)) points.push(coord);
     }
   }
+  return { targetIndexes, points, referencePoints, projectionRangesByIndex };
+}
 
-  if (targetIndexes.length < 2 || points.length < 4) {
-    return {
-      features,
-      diagnostics: {
-        applied: false,
-        target_feature_count: targetIndexes.length,
-        projected_point_count: points.length,
-        snapped_endpoint_clusters: 0,
-        reason: "insufficient_target_geometry",
-      },
-    };
-  }
-
-  const refLat = points.reduce((sum, point) => sum + point[1], 0) / points.length;
+function chooseStNicholasGuide(
+  points: Position[],
+  referencePoints: Position[],
+  spineCoordinates: Position[] | null,
+  refLat: number,
+  maxReferenceDistanceM: number,
+): StNicholasGuide {
   const stationSpine = spineCoordinates ? buildPolylineSpine(spineCoordinates, refLat) : null;
   const referenceAxis = !stationSpine && referencePoints.length >= 4 ? fitAxis(referencePoints, refLat) : null;
-  const axisSelection = !stationSpine && referenceAxis
-    ? axisParallelToReference(referenceAxis, points, refLat, maxReferenceDistanceM)
-    : { axis: fitAxis(points, refLat), selectedOffsetCount: 0 };
-  const axis = axisSelection.axis;
-  const maxBefore = stationSpine
-    ? Math.max(...points.map((point) => projectPointToPolyline(point, stationSpine, refLat).distance))
-    : Math.max(...points.map((point) => distanceToAxisM(point, axis, refLat)));
-  const output = features.slice();
+  if (stationSpine) {
+    return { stationSpine, axis: fitAxis(points, refLat), selectedOffsetCount: 0, referenceAxis };
+  }
+  if (referenceAxis) {
+    const axisSelection = axisParallelToReference(referenceAxis, points, refLat, maxReferenceDistanceM);
+    return { stationSpine, axis: axisSelection.axis, selectedOffsetCount: axisSelection.selectedOffsetCount, referenceAxis };
+  }
+  return { stationSpine, axis: fitAxis(points, refLat), selectedOffsetCount: 0, referenceAxis };
+}
 
-  for (const featureIndex of targetIndexes) {
+function rewriteStNicholasTargets(
+  features: StNicholasFeature[],
+  targets: StNicholasTargets,
+  stationSpine: PolylineSpine | null,
+  axis: Axis,
+  refLat: number,
+  sampleSpacingM: number,
+): StNicholasFeature[] {
+  const output = features.slice();
+  for (const featureIndex of targets.targetIndexes) {
     const feature = output[featureIndex];
-    const projectionRanges = projectionRangesByIndex.get(featureIndex) ?? [];
+    const projectionRanges = targets.projectionRangesByIndex.get(featureIndex) ?? [];
     const coords = stationSpine
       ? replaceRangesWithPolylineSegments(
         feature.geometry.coordinates,
@@ -639,23 +656,74 @@ export function applyStNicholasBlueStraightening(
       },
     };
   }
+  return output;
+}
 
-  const snappedEndpointClusters = snapEndpointClusters(output, targetIndexes, effectiveBBox, endpointSnapM);
+function maxPerpendicularDrift(
+  points: Position[],
+  stationSpine: PolylineSpine | null,
+  axis: Axis,
+  refLat: number,
+): number {
+  if (points.length === 0) return 0;
+  return Math.max(...points.map((point) => (
+    stationSpine
+      ? projectPointToPolyline(point, stationSpine, refLat).distance
+      : distanceToAxisM(point, axis, refLat)
+  )));
+}
+
+export function applyStNicholasBlueStraightening(
+  features: StNicholasFeature[],
+  options: StNicholasOptions = {},
+): StNicholasResult {
+  const resolved = resolveStNicholasOptions(options);
+  const effectiveBBox = expandBBox(resolved.bbox, resolved.marginM);
+  const targets = collectStNicholasTargets(features, effectiveBBox, resolved.rangeExtensionM);
+  if (targets.targetIndexes.length < 2 || targets.points.length < 4) {
+    return {
+      features,
+      diagnostics: {
+        applied: false,
+        target_feature_count: targets.targetIndexes.length,
+        projected_point_count: targets.points.length,
+        snapped_endpoint_clusters: 0,
+        reason: "insufficient_target_geometry",
+      },
+    };
+  }
+
+  const refLat = targets.points.reduce((sum, point) => sum + point[1], 0) / targets.points.length;
+  const guide = chooseStNicholasGuide(
+    targets.points,
+    targets.referencePoints,
+    resolved.spineCoordinates,
+    refLat,
+    resolved.maxReferenceDistanceM,
+  );
+  const maxBefore = maxPerpendicularDrift(targets.points, guide.stationSpine, guide.axis, refLat);
+  const output = rewriteStNicholasTargets(
+    features,
+    targets,
+    guide.stationSpine,
+    guide.axis,
+    refLat,
+    resolved.sampleSpacingM,
+  );
+  const snappedEndpointClusters = snapEndpointClusters(
+    output,
+    targets.targetIndexes,
+    effectiveBBox,
+    resolved.endpointSnapM,
+  );
   const afterPoints: Position[] = [];
-  for (const featureIndex of targetIndexes) {
+  for (const featureIndex of targets.targetIndexes) {
     for (const coord of output[featureIndex].geometry.coordinates) {
       if (inBBox(coord, effectiveBBox)) afterPoints.push(coord);
     }
   }
-  const maxAfter = afterPoints.length
-    ? Math.max(...afterPoints.map((point) => (
-      stationSpine
-        ? projectPointToPolyline(point, stationSpine, refLat).distance
-        : distanceToAxisM(point, axis, refLat)
-    )))
-    : 0;
-
-  for (const featureIndex of targetIndexes) {
+  const maxAfter = maxPerpendicularDrift(afterPoints, guide.stationSpine, guide.axis, refLat);
+  for (const featureIndex of targets.targetIndexes) {
     output[featureIndex].properties.st_nicholas_blue_endpoint_clusters = snappedEndpointClusters;
     output[featureIndex].properties.st_nicholas_blue_max_perp_before_m = Number(maxBefore.toFixed(2));
     output[featureIndex].properties.st_nicholas_blue_max_perp_after_m = Number(maxAfter.toFixed(2));
@@ -665,12 +733,12 @@ export function applyStNicholasBlueStraightening(
     features: output,
     diagnostics: {
       applied: true,
-      target_feature_count: targetIndexes.length,
-      projected_point_count: points.length,
+      target_feature_count: targets.targetIndexes.length,
+      projected_point_count: targets.points.length,
       snapped_endpoint_clusters: snappedEndpointClusters,
-      reference_feature_point_count: referencePoints.length,
-      reference_axis_source: stationSpine ? "station_spine" : (referenceAxis ? "orange_bd" : "blue_fit"),
-      reference_offset_point_count: axisSelection.selectedOffsetCount,
+      reference_feature_point_count: targets.referencePoints.length,
+      reference_axis_source: guide.stationSpine ? "station_spine" : (guide.referenceAxis ? "orange_bd" : "blue_fit"),
+      reference_offset_point_count: guide.selectedOffsetCount,
       max_perpendicular_before_m: Number(maxBefore.toFixed(2)),
       max_perpendicular_after_m: Number(maxAfter.toFixed(2)),
     },

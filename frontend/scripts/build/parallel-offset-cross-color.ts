@@ -20,23 +20,24 @@ const EARTH_RADIUS_M = 6371000;
 const M_PER_DEG_LAT = 110574;
 
 type GeometryLike = {
-  type?: unknown;
-  coordinates?: unknown;
-  [key: string]: unknown;
+  type?: string;
+  coordinates?: Position[] | Position;
 };
 
 type CrossColorProperties = {
   color?: string;
   cross_color_parallelized?: boolean;
-  [key: string]: unknown;
+  corridor_id?: string;
+  marker_type?: string;
+  route_ids?: string[];
+  custom_stage_marker?: string;
 };
 
 export type CrossColorFeature = {
-  type?: unknown;
+  type?: string;
   id?: string | number;
   geometry?: GeometryLike | null;
   properties?: CrossColorProperties | null;
-  [key: string]: unknown;
 };
 
 type CrossColorLineFeature = CrossColorFeature & {
@@ -88,19 +89,27 @@ function cumulativeArcs(coords: Position[]): number[] {
   return arcs;
 }
 
-function isPosition(value: unknown): value is Position {
-  return Array.isArray(value) && value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number";
+function isFiniteNumber(value: number): boolean {
+  return value === Number(value) && Number.isFinite(value);
+}
+
+function isPosition(value: Position | number[]): value is Position {
+  return value.length >= 2 && isFiniteNumber(value[0]) && isFiniteNumber(value[1]);
 }
 
 function isLineFeature(feature: CrossColorFeature): feature is CrossColorLineFeature {
-  return (
-    feature.geometry?.type === "LineString" &&
-    Array.isArray(feature.geometry.coordinates) &&
-    feature.geometry.coordinates.length >= 2 &&
-    feature.geometry.coordinates.every(isPosition) &&
-    feature.properties !== null &&
-    typeof feature.properties === "object"
-  );
+  const geometry = feature.geometry;
+  const properties = feature.properties;
+  const coordinates = geometry?.coordinates;
+  if (geometry?.type !== "LineString" || !Array.isArray(coordinates) || coordinates.length < 2) {
+    return false;
+  }
+  const first = coordinates[0];
+  if (!Array.isArray(first) || !isPosition(first)) return false;
+  for (const row of coordinates) {
+    if (!Array.isArray(row) || !isPosition(row)) return false;
+  }
+  return properties != null && !Array.isArray(properties);
 }
 
 function projectToPolyline(coords: Position[], p: Position): Projection | null {
@@ -142,7 +151,7 @@ function runHasSideFlipOrCoincidence(projections: Array<Projection | null>, star
 
   for (let i = start; i <= end; i += 1) {
     const side = projections[i]?.signedSideM;
-    if (typeof side !== "number" || !Number.isFinite(side)) continue;
+    if (side == null || !Number.isFinite(side)) continue;
 
     sampleCount += 1;
     if (side > sideEpsM) hasPositiveSide = true;
@@ -175,65 +184,116 @@ function mergeArcRanges(ranges: ArcRange[]): ArcRange[] {
 /**
  * The canonical color order uses lower indices for lines that stay put.
  */
+type ResolvedParallelOptions = {
+  colorOrder: string[];
+  overlapDistM: number;
+  sideEpsM: number;
+  minOverlapM: number;
+  laneWidthM: number;
+  taperM: number;
+};
+
+function coveredFlipRanges(
+  coords: Position[],
+  arcs: number[],
+  targetCoords: Position[],
+  overlapDistM: number,
+  sideEpsM: number,
+  minOverlapM: number,
+): ArcRange[] {
+  const projections = coords.map((point) => projectToPolyline(targetCoords, point));
+  const covered = projections.map((projection) => projection !== null && projection.distM <= overlapDistM);
+  const ranges: ArcRange[] = [];
+  let i = 0;
+  while (i < covered.length) {
+    if (!covered[i]) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < covered.length && covered[j + 1]) j += 1;
+    if (arcs[j] - arcs[i] >= minOverlapM && runHasSideFlipOrCoincidence(projections, i, j, sideEpsM)) {
+      ranges.push({ startArc: arcs[i], endArc: arcs[j] });
+    }
+    i = j + 1;
+  }
+  return ranges;
+}
+
+function lowerColorTargets(
+  feature: CrossColorLineFeature,
+  lines: CrossColorLineFeature[],
+  colorOrder: string[],
+): CrossColorLineFeature[] {
+  const color = feature.properties.color;
+  if (!color) return [];
+  const rank = colorRank(color, colorOrder);
+  return lines.filter((target) => {
+    const targetColor = target.properties.color;
+    return Boolean(target !== feature && targetColor && targetColor !== color && colorRank(targetColor, colorOrder) < rank);
+  });
+}
+
+function shiftFeatureOffLowerColors(
+  feature: CrossColorLineFeature,
+  lines: CrossColorLineFeature[],
+  options: ResolvedParallelOptions,
+): CrossColorFeature | null {
+  const targets = lowerColorTargets(feature, lines, options.colorOrder);
+  if (targets.length === 0) return null;
+
+  const coords = feature.geometry.coordinates;
+  const arcs = cumulativeArcs(coords);
+  const rangesToOffset: ArcRange[] = [];
+  for (const target of targets) {
+    rangesToOffset.push(
+      ...coveredFlipRanges(
+        coords,
+        arcs,
+        target.geometry.coordinates,
+        options.overlapDistM,
+        options.sideEpsM,
+        options.minOverlapM,
+      ),
+    );
+  }
+
+  const offsetRanges = mergeArcRanges(rangesToOffset);
+  if (offsetRanges.length === 0) return null;
+
+  let working = coords;
+  for (const range of offsetRanges) {
+    working = offsetPolylineOverExtent(working, range.startArc, range.endArc, options.laneWidthM, options.taperM);
+  }
+  return {
+    ...feature,
+    geometry: { type: "LineString", coordinates: working },
+    properties: { ...feature.properties, cross_color_parallelized: true },
+  };
+}
+
 export function parallelOffsetCrossColor(
   features: CrossColorFeature[],
   options: ParallelOffsetCrossColorOptions = {},
 ): ParallelOffsetCrossColorResult {
-  const { colorOrder = [], overlapDistM = 8, sideEpsM = 0.5, minOverlapM = 150, laneWidthM = 8, taperM = 40 } = options;
+  const resolved: ResolvedParallelOptions = {
+    colorOrder: options.colorOrder ?? [],
+    overlapDistM: options.overlapDistM ?? 8,
+    sideEpsM: options.sideEpsM ?? 0.5,
+    minOverlapM: options.minOverlapM ?? 150,
+    laneWidthM: options.laneWidthM ?? 8,
+    taperM: options.taperM ?? 40,
+  };
   const lines = features.filter(isLineFeature);
-
   const replaced = new Map<CrossColorFeature, CrossColorFeature>();
   let shiftedCount = 0;
 
-  for (const f of lines) {
-    const fColor = f.properties?.color;
-    if (!fColor) continue;
-    const fRank = colorRank(fColor, colorOrder);
-    // lower-rank, different-color targets (the "primary" lines f must move away from)
-    const targets = lines.filter(
-      (t) => t !== f && t.properties?.color && t.properties.color !== fColor && colorRank(t.properties.color, colorOrder) < fRank,
-    );
-    if (targets.length === 0) continue;
-
-    const coords = f.geometry.coordinates;
-    const arcs = cumulativeArcs(coords);
-    const rangesToOffset: ArcRange[] = [];
-
-    for (const target of targets) {
-      const targetCoords = target.geometry.coordinates;
-      const projections = coords.map((p) => projectToPolyline(targetCoords, p));
-      const covered = projections.map((projection) => projection !== null && projection.distM <= overlapDistM);
-
-      // sustained covered runs only qualify when they are coincident or swap sides
-      // of the same lower-rank line. Nearby same-side parallels stay unchanged.
-      let i = 0;
-      while (i < covered.length) {
-        if (!covered[i]) { i += 1; continue; }
-        let j = i;
-        while (j + 1 < covered.length && covered[j + 1]) j += 1;
-        const runLen = arcs[j] - arcs[i];
-        if (runLen >= minOverlapM && runHasSideFlipOrCoincidence(projections, i, j, sideEpsM)) {
-          rangesToOffset.push({ startArc: arcs[i], endArc: arcs[j] });
-        }
-        i = j + 1;
-      }
-    }
-
-    let working = coords;
-    const offsetRanges = mergeArcRanges(rangesToOffset);
-    for (const range of offsetRanges) {
-      working = offsetPolylineOverExtent(working, range.startArc, range.endArc, laneWidthM, taperM);
-    }
-
-    if (offsetRanges.length > 0) {
-      replaced.set(f, {
-        ...f,
-        geometry: { type: "LineString", coordinates: working },
-        properties: { ...f.properties, cross_color_parallelized: true },
-      });
-      shiftedCount += 1;
-    }
+  for (const feature of lines) {
+    const shifted = shiftFeatureOffLowerColors(feature, lines, resolved);
+    if (!shifted) continue;
+    replaced.set(feature, shifted);
+    shiftedCount += 1;
   }
 
-  return { features: features.map((f) => replaced.get(f) ?? f), shiftedCount };
+  return { features: features.map((feature) => replaced.get(feature) ?? feature), shiftedCount };
 }

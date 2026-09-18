@@ -60,7 +60,7 @@ async def certify() -> dict[str, Any]:
             ),
             timeout=7.0,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 unexpected provider failures reduce to an error class
         return {"status": "failed", "reason": "Grok request or normalization failed"}
 
     provider_status = str(result.get("status") or "unavailable")

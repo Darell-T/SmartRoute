@@ -5,6 +5,9 @@
 // runs ~17 m alongside the real A/C/E spine opendata-00015 and renders as a
 // stray parallel blue line. Genuine divergent same-route branches are kept.
 
+import type { JsonValue } from "./types.ts";
+import { propertyString } from "./visual-network/shared/route-config.ts";
+
 type Coordinate = [number, number];
 
 type LineStringFeature = {
@@ -14,11 +17,9 @@ type LineStringFeature = {
     coordinates?: Coordinate[];
   };
   properties?: {
-    corridor_id?: string;
-    route_ids?: string[];
-    [key: string]: unknown;
+    corridor_id?: JsonValue;
+    route_ids?: JsonValue;
   };
-  [key: string]: unknown;
 };
 
 type DedupeOptions = {
@@ -81,14 +82,18 @@ function containment(shortCoords: Coordinate[], longSamples: Coordinate[], distM
 // The longer corridor must carry EVERY route of the shorter (so we never drop a
 // route's only representation).
 function longCarriesAllShortRoutes(longF: LineStringFeature, shortF: LineStringFeature): boolean {
-  const longSet = new Set(longF.properties?.route_ids ?? []);
-  const shortRoutes = shortF.properties?.route_ids ?? [];
+  const longSet = new Set(
+    Array.isArray(longF.properties?.route_ids) ? longF.properties.route_ids.map(String) : [],
+  );
+  const shortRoutes = Array.isArray(shortF.properties?.route_ids)
+    ? shortF.properties.route_ids.map(String)
+    : [];
   return shortRoutes.length > 0 && shortRoutes.every((routeId) => longSet.has(routeId));
 }
 
-function isLineFeature(feature: LineStringFeature): feature is LineStringFeature & {
-  geometry: { type: "LineString"; coordinates: Coordinate[] };
-} {
+function isLineFeature<F extends LineStringFeature>(
+  feature: F,
+): feature is F & { geometry: { type: "LineString"; coordinates: Coordinate[] } } {
   return (
     feature.geometry?.type === "LineString" &&
     Array.isArray(feature.geometry.coordinates) &&
@@ -96,10 +101,10 @@ function isLineFeature(feature: LineStringFeature): feature is LineStringFeature
   );
 }
 
-export function dedupeDuplicateCorridors(
-  features: LineStringFeature[],
+export function dedupeDuplicateCorridors<F extends LineStringFeature>(
+  features: F[],
   options: DedupeOptions = {},
-): { features: LineStringFeature[]; removedIds: string[] } {
+) {
   const { parallelDistM = 25, overlapRatioMin = 0.8 } = options;
   const lines = features.filter(isLineFeature);
   const withLen = lines
@@ -120,8 +125,8 @@ export function dedupeDuplicateCorridors(
     }
     if (duplicate) {
       removedFeatures.add(f);
-      const corridorId = f.properties?.corridor_id;
-      if (corridorId) removedIds.push(corridorId);
+      const corridorId = propertyString(f.properties?.corridor_id);
+      if (corridorId !== undefined) removedIds.push(corridorId);
     } else {
       kept.push({ f, samples: sample(f.geometry.coordinates, parallelDistM * 0.8) });
     }
@@ -130,8 +135,8 @@ export function dedupeDuplicateCorridors(
   const removed = new Set(removedIds);
   return {
     features: features.filter((f) => {
-      const corridorId = f.properties?.corridor_id;
-      return !removedFeatures.has(f) && (!corridorId || !removed.has(corridorId));
+      const corridorId = propertyString(f.properties?.corridor_id);
+      return !removedFeatures.has(f) && (corridorId === undefined || !removed.has(corridorId));
     }),
     removedIds,
   };

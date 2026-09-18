@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from app.services.agent.model import policy as agent_policy
+from typing import TYPE_CHECKING
+
 from app.services.agent import public_surface
-from app.services.agent.tools import ToolContext
+from app.services.agent.model import policy as agent_policy
 from app.services.agent.turn.contract import GoalKind, GoalState
 from app.services.trips.preparation.input import normalize_route_ids
+
+if TYPE_CHECKING:
+    from app.services.agent.tools.base import ToolContext, ToolResult
 
 WEB_PLACE_REQUIRED_ERROR = (
     "web-introduced places must be verified with discover_places before "
@@ -26,12 +30,28 @@ CURRENT_DESTINATION_REQUIRED_ERROR = (
 )
 
 
+def _stripped(value: object) -> str:
+    return str(value or "").strip()
+
+
 def _complete_turn_goal_error(tool_input: dict, contract) -> str | None:
     goal_keys = tool_input.get("goal_keys")
     if not isinstance(goal_keys, list) or not goal_keys:
         return "complete_turn requires at least one declared goal_key"
     if any(contract.get_goal(str(key or "").strip()) is None for key in goal_keys):
         return "complete_turn referenced an unknown goal_key"
+    return None
+
+
+def _evidence_capability_error(evidence, contract, goal_key: str) -> str | None:
+    if evidence.state_for(goal_key) not in {
+        GoalState.PENDING,
+        GoalState.ATTEMPTED_BUT_UNAVAILABLE,
+    }:
+        return "evidence capability is not valid for the goal's current state"
+    blockers = contract.dependency_blockers(goal_key, evidence)
+    if blockers:
+        return "goal dependencies are not ready: " + ", ".join(blockers)
     return None
 
 
@@ -50,6 +70,47 @@ def _place_research_error(name: str, tool_input: dict, evidence) -> str | None:
     return None
 
 
+def _tool_satisfies_declared_goal(name: str, goal, contract, goal_key: str) -> bool:
+    if public_surface.tool_supports_goal(name, goal.kind):
+        return True
+    return (
+        name == "discover_places"
+        and goal.kind == GoalKind.ROUTE
+        and contract.route_allows_internal_discovery(goal_key)
+    )
+
+
+def _presenter_reuse_allowed(
+    name: str,
+    tool_input: dict,
+    ctx: ToolContext,
+    evidence,
+    contract,
+    goal_key: str,
+    state,
+) -> bool:
+    if state != GoalState.PENDING:
+        return False
+    if contract.dependency_blockers(goal_key, evidence):
+        return False
+    if name == "present_places":
+        requested = _stripped(tool_input.get("discovery_set_id"))
+        active = public_surface.active_discovery_set_id(
+            ctx.session,
+            session_id=ctx.session_id,
+        )
+        return requested == active
+    if name != "present_route":
+        return False
+    preview = public_surface.active_temporary_route_preview(
+        ctx.session,
+        session_id=ctx.session_id,
+    )
+    if preview is None:
+        return False
+    return preview[1] == _stripped(tool_input.get("candidate_id"))
+
+
 def goal_error(name: str, tool_input: dict, ctx: ToolContext) -> str | None:
     """Return a bounded contract error for an invalid capability action."""
 
@@ -64,67 +125,100 @@ def goal_error(name: str, tool_input: dict, ctx: ToolContext) -> str | None:
     if name == "complete_turn":
         return _complete_turn_goal_error(tool_input, contract)
 
-    goal_key = str(tool_input.get("goal_key") or "").strip()
+    goal_key = _stripped(tool_input.get("goal_key"))
     goal = contract.get_goal(goal_key)
     if goal is None:
         return "capability requires a declared goal_key"
-    route_owned_discovery = (
-        name == "discover_places"
-        and goal.kind == GoalKind.ROUTE
-        and contract.route_allows_internal_discovery(goal_key)
-    )
-    if not route_owned_discovery and not public_surface.tool_supports_goal(
-        name, goal.kind
-    ):
+    if not _tool_satisfies_declared_goal(name, goal, contract, goal_key):
         return f"{name} cannot satisfy the declared {goal.kind.value} outcome"
     if public_surface.is_evidence_capability(name):
-        if evidence.state_for(goal_key) not in {
-            GoalState.PENDING,
-            GoalState.ATTEMPTED_BUT_UNAVAILABLE,
-        }:
-            return "evidence capability is not valid for the goal's current state"
-        blockers = contract.dependency_blockers(goal_key, evidence)
-        if blockers:
-            return "goal dependencies are not ready: " + ", ".join(blockers)
-    elif public_surface.is_presenter(name):
-        research_error = _place_research_error(name, tool_input, evidence)
-        if research_error:
-            return research_error
-        state = evidence.state_for(goal_key)
-        reuses_active_discovery = (
-            name == "present_places"
-            and state == GoalState.PENDING
-            and not contract.dependency_blockers(goal_key, evidence)
-            and str(tool_input.get("discovery_set_id") or "").strip()
-            == public_surface.active_discovery_set_id(
-                ctx.session,
-                session_id=ctx.session_id,
-            )
+        return _evidence_capability_error(evidence, contract, goal_key)
+    if not public_surface.is_presenter(name):
+        return None
+    research_error = _place_research_error(name, tool_input, evidence)
+    if research_error:
+        return research_error
+    state = evidence.state_for(goal_key)
+    if state != GoalState.EVIDENCE_READY and not _presenter_reuse_allowed(
+        name, tool_input, ctx, evidence, contract, goal_key, state
+    ):
+        return "presenter requires ready server-owned evidence"
+    return None
+
+
+def validated_goal_key(
+    tool_input: dict,
+    ctx: ToolContext,
+    *,
+    compatible_kinds: frozenset[GoalKind] | None = None,
+    incompatible_error: str = "goal_key is incompatible with this capability",
+    require_route_internal_discovery: bool = False,
+) -> tuple[str | None, ToolResult | None]:
+    from app.services.agent.tools.base import ToolResult
+
+    evidence = getattr(ctx, "turn_evidence", None)
+    contract = getattr(evidence, "turn_contract", None)
+    if contract is None:
+        return None, None
+    raw_goal_key = tool_input.get("goal_key")
+    if not isinstance(raw_goal_key, str) or not raw_goal_key.strip():
+        return None, ToolResult(
+            ok=False,
+            error="goal_key is required when a turn contract is active",
+            internal_diagnostic=True,
         )
-        reuses_temporary_route = (
-            name == "present_route"
-            and state == GoalState.PENDING
-            and not contract.dependency_blockers(goal_key, evidence)
-            and public_surface.active_temporary_route_preview(
-                ctx.session,
-                session_id=ctx.session_id,
-            )
-            == (
-                str(
-                    (ctx.session or {})
-                    .get("trip_state", {})
-                    .get("temporary_candidate_set_id")
-                    or ""
-                ).strip(),
-                str(tool_input.get("candidate_id") or "").strip(),
-            )
+    goal_key = raw_goal_key.strip()
+    goal = contract.get_goal(goal_key)
+    if goal is None:
+        return None, ToolResult(
+            ok=False,
+            error="goal_key is unknown for this turn contract",
+            internal_diagnostic=True,
         )
-        if (
-            state != GoalState.EVIDENCE_READY
-            and not reuses_active_discovery
-            and not reuses_temporary_route
-        ):
-            return "presenter requires ready server-owned evidence"
+    if compatible_kinds is not None and goal.kind not in compatible_kinds:
+        return None, ToolResult(
+            ok=False,
+            error=incompatible_error,
+            internal_diagnostic=True,
+        )
+    if (
+        require_route_internal_discovery
+        and goal.kind == GoalKind.ROUTE
+        and not contract.route_allows_internal_discovery(goal_key)
+    ):
+        return None, ToolResult(
+            ok=False,
+            error=incompatible_error,
+            internal_diagnostic=True,
+        )
+    return goal_key, None
+
+
+def _has_destination_ids(destination_ids: object) -> bool:
+    if not isinstance(destination_ids, list):
+        return False
+    return any(_stripped(value) for value in destination_ids)
+
+
+def _current_turn_destination_error(tool_input: dict, evidence) -> str | None:
+    destination_id = _stripped(tool_input.get("destination_place_id"))
+    has_destination_ids = _has_destination_ids(tool_input.get("destination_place_ids"))
+    destination = _stripped(tool_input.get("destination"))
+    if destination_id or has_destination_ids:
+        return None
+    source = _stripped(tool_input.get("destination_source"))
+    if source == "current_turn" and not destination:
+        return CURRENT_DESTINATION_REQUIRED_ERROR
+    if evidence is None:
+        return None
+    if destination.startswith("pl_"):
+        return None
+    if getattr(evidence, "web_used", False):
+        return WEB_PLACE_REQUIRED_ERROR
+    if getattr(evidence, "discovery_set_id", None) and getattr(
+        evidence, "verified_place_count", 0
+    ):
+        return DISCOVERY_PLACE_REQUIRED_ERROR
     return None
 
 
@@ -137,36 +231,11 @@ def missing_verified_destination(
 
     if name != "prepare_route_options":
         return None
-    destination_source = str(
-        (tool_input or {}).get("destination_source") or ""
-    ).strip()
+    destination_source = _stripped((tool_input or {}).get("destination_source"))
     if destination_source not in {"current_turn", "accepted_trip"}:
         return DESTINATION_SOURCE_REQUIRED_ERROR
     evidence = getattr(ctx, "turn_evidence", None)
-    destination_id = str((tool_input or {}).get("destination_place_id") or "").strip()
-    destination_ids = (tool_input or {}).get("destination_place_ids")
-    has_destination_ids = isinstance(destination_ids, list) and any(
-        str(value or "").strip() for value in destination_ids
-    )
-    destination = str((tool_input or {}).get("destination") or "").strip()
-    if (
-        destination_source == "current_turn"
-        and not destination_id
-        and not has_destination_ids
-        and not destination
-    ):
-        return CURRENT_DESTINATION_REQUIRED_ERROR
-    if evidence is None:
-        return None
-    if destination_id or has_destination_ids or destination.startswith("pl_"):
-        return None
-    if getattr(evidence, "web_used", False):
-        return WEB_PLACE_REQUIRED_ERROR
-    if getattr(evidence, "discovery_set_id", None) and getattr(
-        evidence, "verified_place_count", 0
-    ):
-        return DISCOVERY_PLACE_REQUIRED_ERROR
-    return None
+    return _current_turn_destination_error(tool_input or {}, evidence)
 
 
 def authoritative_discovery_input(
@@ -202,6 +271,39 @@ def rider_excluded_route_ids(message: str, session: dict) -> tuple[str, ...]:
     return normalize_route_ids(constraints.get("excluded_route_ids") or [])
 
 
+def _constrained_route_modes(normalized: dict, excluded_modes: set[str]) -> None:
+    allowed_modes = {
+        str(mode).strip().upper()
+        for mode in (normalized.get("allowed_modes") or [])
+        if str(mode).strip().upper() in {"BUS", "SUBWAY", "RAIL"}
+    }
+    requested_modes = {
+        str(mode).strip().upper()
+        for mode in (normalized.get("exclude_modes") or [])
+        if str(mode).strip().upper() in {"BUS", "SUBWAY", "RAIL"}
+    }
+    effective_modes = (excluded_modes - allowed_modes) | requested_modes
+    if excluded_modes or allowed_modes or "exclude_modes" in normalized:
+        normalized["exclude_modes"] = sorted(effective_modes)
+
+
+def _constrained_route_ids(
+    normalized: dict, excluded_route_ids: tuple[str, ...]
+) -> None:
+    excluded_routes = set(normalize_route_ids(excluded_route_ids))
+    allowed_routes = set(
+        normalize_route_ids(normalized.get("allowed_route_ids") or [])
+    )
+    excluded_routes.difference_update(allowed_routes)
+    excluded_routes.update(
+        normalize_route_ids(normalized.get("excluded_route_ids") or [])
+    )
+    if excluded_routes:
+        normalized["excluded_route_ids"] = sorted(excluded_routes)
+    elif excluded_route_ids or allowed_routes or "excluded_route_ids" in normalized:
+        normalized["excluded_route_ids"] = []
+
+
 def constrained_tool_input(
     name: str,
     tool_input: dict,
@@ -214,33 +316,8 @@ def constrained_tool_input(
 
     normalized = dict(tool_input)
     if name == "prepare_route_options":
-        allowed_modes = {
-            str(mode).strip().upper()
-            for mode in (normalized.get("allowed_modes") or [])
-            if str(mode).strip().upper() in {"BUS", "SUBWAY", "RAIL"}
-        }
-        requested_modes = {
-            str(mode).strip().upper()
-            for mode in (normalized.get("exclude_modes") or [])
-            if str(mode).strip().upper() in {"BUS", "SUBWAY", "RAIL"}
-        }
-        effective_modes = (excluded_modes - allowed_modes) | requested_modes
-        if excluded_modes or allowed_modes or "exclude_modes" in normalized:
-            normalized["exclude_modes"] = sorted(effective_modes)
-
-        excluded_routes = set(normalize_route_ids(excluded_route_ids))
-        allowed_routes = set(
-            normalize_route_ids(normalized.get("allowed_route_ids") or [])
-        )
-        excluded_routes.difference_update(allowed_routes)
-        excluded_routes.update(
-            normalize_route_ids(normalized.get("excluded_route_ids") or [])
-        )
-        if excluded_routes:
-            normalized["excluded_route_ids"] = sorted(excluded_routes)
-        elif excluded_route_ids or allowed_routes or "excluded_route_ids" in normalized:
-            normalized["excluded_route_ids"] = []
-
+        _constrained_route_modes(normalized, excluded_modes)
+        _constrained_route_ids(normalized, excluded_route_ids)
         normalized.pop("allowed_modes", None)
         normalized.pop("allowed_route_ids", None)
         normalized["max_candidates"] = mode_policy.max_route_candidates
@@ -255,10 +332,10 @@ def constrained_tool_input(
 
 
 __all__ = [
-    "authoritative_discovery_input",
-    "constrained_tool_input",
     "CURRENT_DESTINATION_REQUIRED_ERROR",
     "DESTINATION_SOURCE_REQUIRED_ERROR",
+    "authoritative_discovery_input",
+    "constrained_tool_input",
     "goal_error",
     "missing_verified_destination",
     "rider_excluded_modes",

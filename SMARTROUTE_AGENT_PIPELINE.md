@@ -17,7 +17,7 @@ Each turn has two server-owned records. `TurnContract` records the goals.
 `TurnEvidence` records the work and results. `turn/completion.py` compares the
 two records before the server accepts a terminal answer.
 
-## The request crosses four boundaries
+## Request path
 
 ```text
 Browser
@@ -47,7 +47,7 @@ domain projects the fields that the model needs for the current decision.
 This limit serves two purposes. It keeps provider data out of model-authored
 facts, and it keeps old state from competing with the current request.
 
-## `declare_goals` gives compound work a shape
+## `declare_goals` records compound work
 
 The model calls `declare_goals` for substantive work. Each goal has a key, a
 kind, and optional dependencies.
@@ -98,6 +98,22 @@ system prompt, hidden reasoning, or raw provider data to the rider.
 `discover_places` calls the place adapter and stores a discovery set.
 `present_places` accepts an ID from that set and emits verified place results.
 
+`discover_places.queue_context` controls optional queue evidence for the
+current destination decision. Google Places remains the place and branch
+authority. A manual Google Place ID registry identifies the physical venues
+that Damn Lines supports. `ignore` performs no queue work. `heads_up` checks
+only selected places during presentation. `decision` lets the Agent consider
+normalized queue evidence before it selects a destination. `historical`
+answers an explicit past-pattern question. This remains part of
+`discover_places`. It does not add a ninth model-visible tool.
+
+Current queue observations retain the provider capture time and never change
+route duration. Historical patterns refresh outside the request path and stay
+distinct from live evidence. `present_places` owns the passenger wording and a
+structured Damn Lines source event. The frontend renders that source after the
+conversation text. Maps, route cards, route steps, and itinerary facts do not
+receive queue data.
+
 The session keeps place identities for later turns. "The second one" refers to
 the latest compatible list. A duplicate name or missing list causes
 clarification instead of a guess.
@@ -117,14 +133,16 @@ coverage. `present_transit` validates the evidence ID and writes passenger text
 from those stored facts.
 
 Stalled-train signals come from `app/services/mta/subway.py`. The agent reaches
-them through `app.services.mta.realtime`. The deleted `mta_feed.py` module is
-not part of this path.
+them through `app.services.mta.realtime`.
 
 ## Route work crosses into the trips domain
 
 `prepare_route_options` resolves the origin, destination, time, constraints,
-and waypoints. Its agent adapter then calls
-`app/services/trips/preparation/`.
+and waypoints. `tools/route/preparation_adapter.py` passes an explicit
+`PreparationDependencies` bundle to `app/services/trips/preparation/`.
+The adapter supplies Agent location resolution and timing callbacks, and
+converts preparation failures to tool results. The trips package owns the
+route computation for both this path and direct `POST /api/trip` requests.
 
 The trips domain calls Google Routes and gathers candidate-specific evidence.
 It applies hard constraints, combines multi-stop legs, and builds canonical
@@ -158,8 +176,14 @@ The agent yields typed events such as activity text, message text, place
 results, transit results, route cards, errors, and the final done record.
 `app/routers/agent_chat.py` serializes those events as SSE.
 
-The frontend validates each event before it changes chat state. Cards render
-structured backend data. Message text never becomes a second route record.
+`frontend/lib/agent-chat/event-validator.ts` validates each event before it
+changes chat state. Required card identity and summary fields must be valid.
+Malformed optional itinerary, route, alert, or selection fields are omitted
+without discarding the valid card. Missing canonical facts remain unavailable.
+
+Chat displays cards marked `recommended` and leaves alternatives in shared
+state for the map. Cards can render after a turn settles even when it has no
+assistant prose. Message text never becomes a second route record.
 
 ## Session state supports follow-up requests
 
@@ -177,12 +201,14 @@ request-owned tasks before another turn can write presentation state.
 
 ## Auto and Quick use the same contract
 
-Auto and Quick change model policy and budgets. They do not change the tool
-registry, route ownership, completion checks, or presenter rules.
+Auto and Quick use the same configured Sonnet model, tool registry, route
+ownership, completion checks, and presenter rules. `model/policy.py` changes
+their candidate, place, output, round, and research budgets.
 
-Quick can use a lower-cost request policy. If the turn needs work outside that
-policy, the server can move the turn to Auto. The accepted server state remains
-the same across that change.
+Quick requests concise explanations and disables optional enrichment. Auto
+allows a larger candidate set and comparative explanations. The selected mode
+stays fixed for the turn. Both modes must satisfy the same server-owned goals
+before completing.
 
 ## Failure keeps verified results
 

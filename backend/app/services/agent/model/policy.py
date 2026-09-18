@@ -16,14 +16,6 @@ from app import runtime
 ResponseMode = Literal["auto", "quick"]
 
 
-def _positive_int(name: str, default: int, *, minimum: int = 0) -> int:
-    try:
-        value = int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-    return max(minimum, value)
-
-
 def _positive_int_with_legacy(
     name: str,
     legacy_name: str,
@@ -32,8 +24,8 @@ def _positive_int_with_legacy(
     minimum: int = 0,
 ) -> int:
     if name in os.environ:
-        return _positive_int(name, default, minimum=minimum)
-    return _positive_int(legacy_name, default, minimum=minimum)
+        return runtime.env_int(name, default, minimum=minimum)
+    return runtime.env_int(legacy_name, default, minimum=minimum)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -106,12 +98,12 @@ def policy_for_mode(value: object) -> AgentModePolicy:
         return AgentModePolicy(
             mode="quick",
             model=model,
-            max_route_candidates=_positive_int("AGENT_QUICK_MAX_ROUTE_CANDIDATES", 2, minimum=1),
-            max_presented_places=_positive_int("AGENT_QUICK_MAX_PRESENTED_PLACES", 3, minimum=1),
-            retry_count=_positive_int("AGENT_QUICK_RETRY_COUNT", 1),
-            max_output_tokens=_positive_int("AGENT_QUICK_MAX_OUTPUT_TOKENS", 1024, minimum=64),
+            max_route_candidates=runtime.env_int("AGENT_QUICK_MAX_ROUTE_CANDIDATES", 2, minimum=1),
+            max_presented_places=runtime.env_int("AGENT_QUICK_MAX_PRESENTED_PLACES", 3, minimum=1),
+            retry_count=runtime.env_int("AGENT_QUICK_RETRY_COUNT", 1),
+            max_output_tokens=runtime.env_int("AGENT_QUICK_MAX_OUTPUT_TOKENS", 1024, minimum=64),
             output_effort=_output_effort("AGENT_QUICK_OUTPUT_EFFORT"),
-            max_rounds=_positive_int("AGENT_QUICK_MAX_ROUNDS", 4, minimum=1),
+            max_rounds=runtime.env_int("AGENT_QUICK_MAX_ROUNDS", 4, minimum=1),
             explanation_style="concise",
             optional_enrichment=False,
             web_research_timeout_s=3.0,
@@ -119,9 +111,9 @@ def policy_for_mode(value: object) -> AgentModePolicy:
     return AgentModePolicy(
         mode="auto",
         model=model,
-        max_route_candidates=_positive_int("AGENT_AUTO_MAX_ROUTE_CANDIDATES", 5, minimum=1),
-        max_presented_places=_positive_int("AGENT_AUTO_MAX_PRESENTED_PLACES", 5, minimum=1),
-        retry_count=_positive_int("AGENT_AUTO_RETRY_COUNT", 1),
+        max_route_candidates=runtime.env_int("AGENT_AUTO_MAX_ROUTE_CANDIDATES", 5, minimum=1),
+        max_presented_places=runtime.env_int("AGENT_AUTO_MAX_PRESENTED_PLACES", 5, minimum=1),
+        retry_count=runtime.env_int("AGENT_AUTO_RETRY_COUNT", 1),
         max_output_tokens=_positive_int_with_legacy(
             "AGENT_AUTO_MAX_OUTPUT_TOKENS",
             "AGENT_MAX_TOKENS_PER_ROUND",

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+import logging
+from datetime import UTC, datetime
+
+import httpx
 
 from app.services.mta.config import ALERTS_URL, NYC_TZ
 from app.services.mta.feeds import parse_feed_message
+from app.services.text import collapse_whitespace
 
+_LOGGER = logging.getLogger(__name__)
 
 _ALERTS_METADATA_KEY = f"{ALERTS_URL}:metadata"
 _ALERT_SOURCE = "mta_service_alerts"
@@ -14,6 +19,35 @@ _ALERT_ID_LIMIT = 120
 _TEXT_LIMIT = 480
 _LIST_LIMIT = 24
 _SEGMENT_LIMIT = 24
+_DIRECTION_SCOPES = frozenset({"both_directions", "direction_specific", "unspecified"})
+_PLANNED_STATUSES = frozenset({"planned", "unplanned", "unknown"})
+_CHANGE_TYPES = frozenset({
+    "express_to_local",
+    "suspension",
+    "severe_delay",
+    "delay",
+    "planned_service_change",
+    "unknown",
+})
+_NO_SERVICE_PHRASES = (
+    "suspend",
+    "no service",
+    "not running",
+    "does not run",
+    "will not run",
+)
+_LOCAL_OPERATION_PHRASES = (
+    "runs local",
+    "run local",
+    "running local",
+    "operates local",
+    "operate local",
+    "to local",
+)
+_PLANNED_STATUS_PREFIXES = (
+    ("lmm:planned_work", "planned"),
+    ("lmm:alert", "unplanned"),
+)
 
 
 def _content_digest(content: object) -> str:
@@ -40,6 +74,36 @@ def _cached_observed_at(cache_get, content: object) -> str | None:
         return None
 
 
+def _alerts_payload(
+    content: bytes,
+    freshness: str,
+    observed_at: str | None,
+    with_metadata: bool,
+) -> bytes | dict[str, object]:
+    if with_metadata:
+        return {
+            "content": content,
+            "freshness": freshness,
+            "observed_at": observed_at,
+        }
+    return content
+
+
+def _store_alerts_cache(cache_set, content: bytes, observed_at: str) -> None:
+    cache_set(ALERTS_URL, content, 60, fail_open=True)
+    cache_set(
+        _ALERTS_METADATA_KEY,
+        json.dumps(
+            {
+                "observed_at": observed_at,
+                "content_sha256": _content_digest(content),
+            }
+        ),
+        60,
+        fail_open=True,
+    )
+
+
 async def fetch_service_alerts(
     force_refresh: bool = False,
     *,
@@ -49,65 +113,42 @@ async def fetch_service_alerts(
     from app.services.cache import cache_get, cache_set
     cached = cache_get(ALERTS_URL, fail_open=True)
     cached_observed_at = _cached_observed_at(cache_get, cached)
-    if cached:
-        if not force_refresh:
-            result = {
-                "content": cached,
-                "freshness": "cached",
-                "observed_at": cached_observed_at,
-            }
-            return result if with_metadata else cached
+    if cached and not force_refresh:
+        return _alerts_payload(cached, "cached", cached_observed_at, with_metadata)
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:  # noqa: TID251
             response = await client.get(ALERTS_URL)
-        if response.status_code != 200:
-            raise RuntimeError(f"HTTP {response.status_code}")
-        observed_at = datetime.now(timezone.utc).isoformat()
-        if cache_result:
-            cache_set(ALERTS_URL, response.content, 60, fail_open=True)
-            cache_set(
-                _ALERTS_METADATA_KEY,
-                json.dumps(
-                    {
-                        "observed_at": observed_at,
-                        "content_sha256": _content_digest(response.content),
-                    }
-                ),
-                60,
-                fail_open=True,
-            )
-        result = {
-            "content": response.content,
-            "freshness": "live",
-            "observed_at": observed_at,
-        }
-        return result if with_metadata else response.content
-    except Exception as exc:
-        print(f"[mta_feed] alerts feed failed: {type(exc).__name__}: {exc!r}")
+        _require_alerts_http_ok(response)
+    except Exception as exc:  # noqa: BLE001 alert-feed faults fall back to cache or empty
+        _LOGGER.warning(
+            "[mta_feed] alerts feed failed: %s: %r",
+            type(exc).__name__,
+            exc,
+        )
         if cached:
-            result = {
-                "content": cached,
-                "freshness": "stale",
-                "observed_at": cached_observed_at,
-            }
-            return result if with_metadata else cached
-        result = {"content": b"", "freshness": "unavailable", "observed_at": None}
-        return result if with_metadata else b""
+            return _alerts_payload(cached, "stale", cached_observed_at, with_metadata)
+        return _alerts_payload(b"", "unavailable", None, with_metadata)
+    observed_at = datetime.now(UTC).isoformat()
+    if cache_result:
+        _store_alerts_cache(cache_set, response.content, observed_at)
+    return _alerts_payload(response.content, "live", observed_at, with_metadata)
+
+
+def _require_alerts_http_ok(response) -> None:
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}")
 
 
 def _period_bounds(period) -> tuple[int | None, int | None]:
-    start = period.start if period.start else None
-    end = period.end if period.end else None
+    start = period.start or None
+    end = period.end or None
     return start, end
 
 
 def _period_is_active(start: int | None, end: int | None, now: float) -> bool:
     if start and now < start:
         return False
-    if end and end > 0 and now > end:
-        return False
-    return True
+    return not (end and end > 0 and now > end)
 
 
 def _period_is_today_or_unexpired(start: int | None, end: int | None, now: float) -> bool:
@@ -134,14 +175,10 @@ def _english_text(text_field) -> str:
 
 
 def is_material_service_alert(alert: object) -> bool:
-    """Treat only an explicit typed non-material service change as benign."""
-
     return not (isinstance(alert, dict) and alert.get("material_disruption") is False)
 
 
 def project_service_alert(alert: object) -> dict[str, object] | None:
-    """Keep official alert evidence compact while preserving typed semantics."""
-
     if isinstance(alert, str):
         alert = {"header": alert}
     if not isinstance(alert, dict):
@@ -161,22 +198,15 @@ def project_service_alert(alert: object) -> dict[str, object] | None:
     )
     start = alert.get("effective_start", alert.get("start"))
     end = alert.get("effective_end", alert.get("end"))
-    direction_scope = _bounded_text(alert.get("direction_scope"), 32)
-    if direction_scope not in {"both_directions", "direction_specific", "unspecified"}:
-        direction_scope = "unspecified"
-    planned_status = _bounded_text(alert.get("planned_status"), 16)
-    if planned_status not in {"planned", "unplanned", "unknown"}:
-        planned_status = "unknown"
-    change_type = _bounded_text(alert.get("change_type"), 32)
-    if change_type not in {
-        "express_to_local",
-        "suspension",
-        "severe_delay",
-        "delay",
-        "planned_service_change",
-        "unknown",
-    }:
-        change_type = "unknown"
+    direction_scope = _whitelisted_text(
+        alert.get("direction_scope"), 32, _DIRECTION_SCOPES, "unspecified"
+    )
+    planned_status = _whitelisted_text(
+        alert.get("planned_status"), 16, _PLANNED_STATUSES, "unknown"
+    )
+    change_type = _whitelisted_text(
+        alert.get("change_type"), 32, _CHANGE_TYPES, "unknown"
+    )
     service_operating = _service_operating(alert.get("service_operating"))
     material_disruption = alert.get("material_disruption") is not False
     observed_at = _bounded_text(
@@ -215,7 +245,16 @@ def project_service_alert(alert: object) -> dict[str, object] | None:
 
 
 def _bounded_text(value: object, limit: int) -> str:
-    return " ".join(str(value or "").split()).strip()[:limit]
+    return collapse_whitespace(value)[:limit]
+
+
+def _whitelisted_text(
+    value: object, limit: int, allowed: frozenset[str], default: str
+) -> str:
+    text = _bounded_text(value, limit)
+    if text in allowed:
+        return text
+    return default
 
 
 def _bounded_ids(value: object, *, upper: bool = False) -> list[str]:
@@ -232,20 +271,27 @@ def _bounded_ids(value: object, *, upper: bool = False) -> list[str]:
     return result
 
 
+def _bounded_segment(item: object) -> dict[str, str] | None:
+    if not isinstance(item, dict):
+        return None
+    segment: dict[str, str] = {}
+    for key in ("route_id", "stop_id", "direction_id"):
+        text = _bounded_text(item.get(key), _ALERT_ID_LIMIT)
+        if text:
+            segment[key] = text
+    if not segment:
+        return None
+    return segment
+
+
 def _bounded_segments(value: object) -> list[dict[str, str]]:
     if not isinstance(value, list):
         return []
     result: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     for item in value:
-        if not isinstance(item, dict):
-            continue
-        segment = {
-            key: _bounded_text(item.get(key), _ALERT_ID_LIMIT)
-            for key in ("route_id", "stop_id", "direction_id")
-            if _bounded_text(item.get(key), _ALERT_ID_LIMIT)
-        }
-        if not segment:
+        segment = _bounded_segment(item)
+        if segment is None:
             continue
         identity = (
             segment.get("route_id", ""),
@@ -272,7 +318,7 @@ def _epoch_iso(value: object) -> str | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         return None
     try:
-        return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(float(value), tz=UTC).isoformat()
     except (OverflowError, OSError, ValueError):
         return None
 
@@ -284,51 +330,44 @@ def _direction_id(informed_entity) -> str | None:
     return None
 
 
+def _change_type_from_text(
+    text: str,
+    planned_status: str,
+    no_service: bool,
+    local_operation: bool,
+) -> str:
+    if local_operation and planned_status == "planned":
+        return "express_to_local"
+    if local_operation and "express" in text:
+        return "express_to_local"
+    if no_service:
+        return "suspension"
+    if "severe" in text and "delay" in text:
+        return "severe_delay"
+    if "delay" in text:
+        return "delay"
+    if planned_status == "planned":
+        return "planned_service_change"
+    return "unknown"
+
+
 def _alert_semantics(
     source_id: str,
     header: str,
     description: str,
 ) -> tuple[str, str, bool | str, bool]:
     text = f"{header} {description}".casefold()
-    if source_id.casefold().startswith("lmm:planned_work"):
-        planned_status = "planned"
-    elif source_id.casefold().startswith("lmm:alert"):
-        planned_status = "unplanned"
-    else:
-        planned_status = "unknown"
-    no_service = any(
-        phrase in text
-        for phrase in (
-            "suspend",
-            "no service",
-            "not running",
-            "does not run",
-            "will not run",
-        )
+    folded = source_id.casefold()
+    planned_status = "unknown"
+    for prefix, status in _PLANNED_STATUS_PREFIXES:
+        if folded.startswith(prefix):
+            planned_status = status
+            break
+    no_service = any(phrase in text for phrase in _NO_SERVICE_PHRASES)
+    local_operation = any(phrase in text for phrase in _LOCAL_OPERATION_PHRASES)
+    change_type = _change_type_from_text(
+        text, planned_status, no_service, local_operation
     )
-    local_operation = any(
-        phrase in text
-        for phrase in (
-            "runs local",
-            "run local",
-            "running local",
-            "operates local",
-            "operate local",
-            "to local",
-        )
-    )
-    if local_operation and (planned_status == "planned" or "express" in text):
-        change_type = "express_to_local"
-    elif no_service:
-        change_type = "suspension"
-    elif "severe" in text and "delay" in text:
-        change_type = "severe_delay"
-    elif "delay" in text:
-        change_type = "delay"
-    elif planned_status == "planned":
-        change_type = "planned_service_change"
-    else:
-        change_type = "unknown"
     if no_service:
         service_operating: bool | str = False
     elif local_operation or "service operates" in text:
@@ -343,80 +382,111 @@ def _alert_semantics(
     return planned_status, change_type, service_operating, material_disruption
 
 
+def _alert_period(
+    alert, include_same_day: bool, now: float
+) -> tuple[int | None, int | None] | None:
+    if not alert.active_period:
+        return (None, None)
+    for period in alert.active_period:
+        period_start, period_end = _period_bounds(period)
+        matches = (
+            _period_is_today_or_unexpired(period_start, period_end, now)
+            if include_same_day
+            else _period_is_active(period_start, period_end, now)
+        )
+        if matches:
+            return _period_bounds(period)
+    return None
+
+
+def _direction_scope_label(direction_ids: set[str]) -> str:
+    values = sorted(direction_ids)
+    if len(values) > 1:
+        return "both_directions"
+    if values:
+        return "direction_specific"
+    return "unspecified"
+
+
+def _add_informed_entity(
+    informed_entity,
+    route_ids: set[str],
+    stop_ids: set[str],
+    direction_ids: set[str],
+    segments: list[dict[str, str]],
+) -> bool:
+    route_id = _bounded_text(informed_entity.route_id, _ALERT_ID_LIMIT)
+    stop_id = _bounded_text(informed_entity.stop_id, _ALERT_ID_LIMIT)
+    direction_id = _direction_id(informed_entity)
+    if route_id:
+        route_ids.add(route_id)
+    if stop_id:
+        stop_ids.add(stop_id)
+    if direction_id:
+        direction_ids.add(direction_id)
+    segment = {
+        key: value
+        for key, value in (
+            ("route_id", route_id),
+            ("stop_id", stop_id),
+            ("direction_id", direction_id or ""),
+        )
+        if value
+    }
+    if segment and segment not in segments:
+        segments.append(segment)
+        return len(segments) >= _SEGMENT_LIMIT
+    return False
+
+
+def _informed_scope(alert) -> tuple[list[str], list[str], list[str], list[dict[str, str]], str]:
+    route_ids: set[str] = set()
+    stop_ids: set[str] = set()
+    direction_ids: set[str] = set()
+    segments: list[dict[str, str]] = []
+    for informed_entity in alert.informed_entity:
+        if _add_informed_entity(
+            informed_entity, route_ids, stop_ids, direction_ids, segments
+        ):
+            break
+    return (
+        sorted(route_ids),
+        sorted(stop_ids),
+        sorted(direction_ids),
+        segments,
+        _direction_scope_label(direction_ids),
+    )
+
+
 def _parse_service_alerts(
-    rawBytes: bytes,
+    raw_bytes: bytes,
     *,
     include_same_day: bool,
     now_timestamp: float | None = None,
 ) -> list:
-    feed = parse_feed_message(rawBytes)
+    feed = parse_feed_message(raw_bytes)
     now = now_timestamp if now_timestamp is not None else datetime.now(tz=NYC_TZ).timestamp()
-    feed_observed_at = _epoch_iso(feed.header.timestamp if feed.header.timestamp else None)
+    feed_observed_at = _epoch_iso(feed.header.timestamp or None)
     local_verified_at = _epoch_iso(now)
     alerts = []
     for entity in feed.entity:
         if not entity.HasField("alert"):
             continue
-        alert = entity.alert
-        start = None
-        end = None
-        if alert.active_period:
-            matching_period = None
-            for period in alert.active_period:
-                period_start, period_end = _period_bounds(period)
-                matches = (
-                    _period_is_today_or_unexpired(period_start, period_end, now)
-                    if include_same_day
-                    else _period_is_active(period_start, period_end, now)
-                )
-                if matches:
-                    matching_period = period
-                    break
-            if matching_period is None:
-                continue
-            start, end = _period_bounds(matching_period)
-        header = _bounded_text(_english_text(alert.header_text), _TEXT_LIMIT)
+        period = _alert_period(entity.alert, include_same_day, now)
+        if period is None:
+            continue
+        start, end = period
+        header = _bounded_text(_english_text(entity.alert.header_text), _TEXT_LIMIT)
         description = _bounded_text(
-            _english_text(alert.description_text), _TEXT_LIMIT
+            _english_text(entity.alert.description_text), _TEXT_LIMIT
         )
         source_id = _bounded_text(entity.id, _ALERT_ID_LIMIT)
         planned_status, change_type, service_operating, material_disruption = (
             _alert_semantics(source_id, header, description)
         )
-        route_ids = set()
-        stop_ids = set()
-        direction_ids = set()
-        segments: list[dict[str, str]] = []
-        for informed_entity in alert.informed_entity:
-            route_id = _bounded_text(informed_entity.route_id, _ALERT_ID_LIMIT)
-            stop_id = _bounded_text(informed_entity.stop_id, _ALERT_ID_LIMIT)
-            direction_id = _direction_id(informed_entity)
-            if route_id:
-                route_ids.add(route_id)
-            if stop_id:
-                stop_ids.add(stop_id)
-            if direction_id:
-                direction_ids.add(direction_id)
-            segment = {
-                key: value
-                for key, value in (
-                    ("route_id", route_id),
-                    ("stop_id", stop_id),
-                    ("direction_id", direction_id or ""),
-                )
-                if value
-            }
-            if segment and segment not in segments:
-                segments.append(segment)
-                if len(segments) >= _SEGMENT_LIMIT:
-                    break
-        direction_values = sorted(direction_ids)
-        if len(direction_values) > 1:
-            direction_scope = "both_directions"
-        elif direction_values:
-            direction_scope = "direction_specific"
-        else:
-            direction_scope = "unspecified"
+        route_ids, stop_ids, direction_values, segments, direction_scope = (
+            _informed_scope(entity.alert)
+        )
         alerts.append(
             {
                 "source": _ALERT_SOURCE,
@@ -424,8 +494,8 @@ def _parse_service_alerts(
                 "alert_id": source_id,
                 "header": header,
                 "description": description,
-                "route_ids": sorted(route_ids),
-                "stop_ids": sorted(stop_ids),
+                "route_ids": route_ids,
+                "stop_ids": stop_ids,
                 "direction_ids": direction_values,
                 "direction_scope": direction_scope,
                 "affected_segments": segments,
@@ -447,12 +517,12 @@ def _parse_service_alerts(
     return alerts
 
 
-def parse_service_alerts(rawBytes: bytes) -> list:
-    return _parse_service_alerts(rawBytes, include_same_day=False)
+def parse_service_alerts(raw_bytes: bytes) -> list:
+    return _parse_service_alerts(raw_bytes, include_same_day=False)
 
 
-def parse_service_alerts_for_service_board(rawBytes: bytes) -> list:
-    return _parse_service_alerts(rawBytes, include_same_day=True)
+def parse_service_alerts_for_service_board(raw_bytes: bytes) -> list:
+    return _parse_service_alerts(raw_bytes, include_same_day=True)
 
 
 def filter_alerts_for_routes(alerts: list, route_ids: set) -> list:

@@ -10,7 +10,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.services.agent import events as agent_events
+from app.services.agent import public_surface
 from app.services.agent.model import policy as agent_policy
+from app.services.agent.model import prompt as agent_prompt
+from app.services.agent.tools import COMBINED_TOOL_REGISTRY, ToolSpec
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +75,82 @@ def build_stream_kwargs(
         "system": system_blocks,
         **dict(request_options or {}),
     }
+    _strip_unsupported_sampling_and_thinking(kwargs, capabilities)
+    if capabilities.supports_effort:
+        kwargs["output_config"] = {"effort": mode_policy.output_effort}
+    _reject_unsupported_prefill(
+        messages, capabilities, allow_server_tool_continuation
+    )
+    kwargs["max_tokens"] = mode_policy.max_output_tokens
+    kwargs["tools"] = list(tools)
+    if tools and "tool_choice" not in kwargs:
+        kwargs["tool_choice"] = {"type": "any"}
+    return kwargs
+
+
+def system_blocks() -> list[dict]:
+    return [
+        {
+            "type": "text",
+            "text": agent_prompt.active_system_prompt(),
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def messages_from_history(history: list[dict]) -> list[dict]:
+    messages: list[dict] = []
+    for entry in history or []:
+        role = entry.get("role")
+        if role in {"user", "assistant"}:
+            messages.append({"role": role, "content": entry.get("text", "")})
+    return messages
+
+
+def web_search_tool() -> dict:
+    return {
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": 1,
+        "allowed_callers": ["direct"],
+        "user_location": {
+            "type": "approximate",
+            "city": "New York City",
+            "region": "New York",
+            "country": "US",
+            "timezone": "America/New_York",
+        },
+    }
+
+
+def tools_for_state(
+    _mode_policy: agent_policy.AgentModePolicy | None = None,
+    session: dict | None = None,
+    include_web: bool = False,
+    turn_evidence: object | None = None,
+    session_id: str | None = None,
+    *,
+    tool_registry: Mapping[str, ToolSpec] | None = None,
+) -> list[dict]:
+    registry = COMBINED_TOOL_REGISTRY if tool_registry is None else tool_registry
+    tools = [
+        dict(schema)
+        for schema in public_surface.schemas_for_state(
+            (spec.schema for spec in registry.values()),
+            turn_evidence,
+            session=session,
+            session_id=session_id,
+        )
+    ]
+    if include_web:
+        tools.append(web_search_tool())
+    return tools
+
+
+def _strip_unsupported_sampling_and_thinking(
+    kwargs: dict[str, Any],
+    capabilities: agent_policy.ModelRequestCapabilities,
+) -> None:
     if not capabilities.supports_manual_thinking:
         thinking = kwargs.get("thinking")
         if isinstance(thinking, Mapping) and thinking.get("type") == "enabled":
@@ -79,9 +158,13 @@ def build_stream_kwargs(
     if not capabilities.supports_non_default_sampling:
         for field in _SAMPLING_FIELDS:
             kwargs.pop(field, None)
-    if capabilities.supports_effort:
-        kwargs["output_config"] = {"effort": mode_policy.output_effort}
 
+
+def _reject_unsupported_prefill(
+    messages: list[dict],
+    capabilities: agent_policy.ModelRequestCapabilities,
+    allow_server_tool_continuation: bool,
+) -> None:
     if (
         not capabilities.supports_assistant_prefill
         and not allow_server_tool_continuation
@@ -89,12 +172,6 @@ def build_stream_kwargs(
         and messages[-1].get("role") == "assistant"
     ):
         raise ValueError("configured model does not support assistant prefill")
-
-    kwargs["max_tokens"] = mode_policy.max_output_tokens
-    kwargs["tools"] = list(tools)
-    if tools and "tool_choice" not in kwargs:
-        kwargs["tool_choice"] = {"type": "any"}
-    return kwargs
 
 
 def request_diagnostics(kwargs: Mapping[str, Any]) -> str:
@@ -107,7 +184,7 @@ def request_diagnostics(kwargs: Mapping[str, Any]) -> str:
         f"model={agent_policy.safe_model_label(str(kwargs.get('model') or ''))} "
         f"tools_supplied={int('tools' in kwargs)} tool_count={tool_count} "
         f"thinking_supplied={int('thinking' in kwargs)} sampling_fields={sampling} "
-        f"effort={str((kwargs.get('output_config') or {}).get('effort') or 'default')} "
+        f"effort={(kwargs.get('output_config') or {}).get('effort') or 'default'!s} "
         f"max_tokens={int(kwargs.get('max_tokens') or 0)}"
     )
 

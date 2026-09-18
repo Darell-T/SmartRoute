@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from app.services import cache
+
 from tests.test_agent_loop import _AgentLoopHelpers, _load_agent_loop, _transit_input
 
 
@@ -81,6 +82,5 @@ class AgentLoopRoundCapTestCase(AgentLoopReliabilityTestCase):
             {
                 "AGENT_AUTO_MAX_ROUNDS": "2",
                 "AGENT_QUICK_MAX_ROUNDS": "2",
-                "AGENT_TURN_DEADLINE_S": "60",
             }
         )

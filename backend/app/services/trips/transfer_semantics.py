@@ -2,13 +2,30 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
-from app.services.trips.itinerary import TRANSIT_MODES
 from app.services import geography as geo
+from app.services.trips.itinerary import TRANSIT_MODES
 
 WALK_SPEED_MPS = 1.4
+
+
+@dataclass(frozen=True)
+class EndpointIdentity:
+    stop_id: str | None
+    is_parent: bool = False
+    parent: str | None = None
+    complex: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "stop_id": self.stop_id,
+            "is_parent": self.is_parent,
+            "parent": self.parent,
+            "complex": self.complex,
+        }
 
 
 def normalize_routes(routes: list[list[dict]], gtfs: Any = None) -> list[list[dict]]:
@@ -36,34 +53,46 @@ def normalize_route(route: list[dict], gtfs: Any = None) -> list[dict]:
         start = index
         while index + 1 < len(route) and _mode(route[index + 1]) == "WALK":
             index += 1
-        end = index
-        previous = route[start - 1] if start > 0 else None
-        following = route[end + 1] if end + 1 < len(route) else None
-        if _is_transit(previous) and _is_transit(following):
-            fact = _transfer_fact(
-                previous,
-                following,
-                route[start : end + 1],
-                gtfs,
-                group_number,
-            )
-            group_number += 1
-            fragments = route[start : end + 1]
-            first_fragment = fragments[0]
-            last_fragment = fragments[-1]
-            if last_fragment.get("arrival_time_iso"):
-                first_fragment["arrival_time_iso"] = last_fragment["arrival_time_iso"]
-            if last_fragment.get("end_point"):
-                first_fragment["end_point"] = last_fragment["end_point"]
-            first_fragment["transfer_duration_seconds"] = fact["total_seconds"]
-            for fragment_index in range(start, end + 1):
-                route[fragment_index]["semantic_transfer_group_id"] = fact["group_id"]
-                route[fragment_index]["transfer_semantics"] = fact
-                route[fragment_index]["semantic_transfer"] = fact
-                route[fragment_index]["transfer_kind"] = fact["kind"]
-                route[fragment_index]["semantic_transfer_fragment"] = fragment_index != start
+        group_number = _annotate_walk_transfer(
+            route, start, index, gtfs, group_number
+        )
         index += 1
     return route
+
+
+def _annotate_walk_transfer(
+    route: list[dict],
+    start: int,
+    end: int,
+    gtfs: Any,
+    group_number: int,
+) -> int:
+    previous = route[start - 1] if start > 0 else None
+    following = route[end + 1] if end + 1 < len(route) else None
+    if not (_is_transit(previous) and _is_transit(following)):
+        return group_number
+    fact = _transfer_fact(
+        previous,
+        following,
+        route[start : end + 1],
+        gtfs,
+        group_number,
+    )
+    fragments = route[start : end + 1]
+    first_fragment = fragments[0]
+    last_fragment = fragments[-1]
+    if last_fragment.get("arrival_time_iso"):
+        first_fragment["arrival_time_iso"] = last_fragment["arrival_time_iso"]
+    if last_fragment.get("end_point"):
+        first_fragment["end_point"] = last_fragment["end_point"]
+    first_fragment["transfer_duration_seconds"] = fact["total_seconds"]
+    for fragment_index in range(start, end + 1):
+        route[fragment_index]["semantic_transfer_group_id"] = fact["group_id"]
+        route[fragment_index]["transfer_semantics"] = fact
+        route[fragment_index]["semantic_transfer"] = fact
+        route[fragment_index]["transfer_kind"] = fact["kind"]
+        route[fragment_index]["semantic_transfer_fragment"] = fragment_index != start
+    return group_number + 1
 
 
 def route_transfer_facts(route: list[dict]) -> list[dict[str, Any]]:
@@ -85,19 +114,31 @@ def route_walking_totals(route: list[dict]) -> tuple[int, int]:
     in_station = 0
     seen_groups: set[str] = set()
     for step in route or []:
-        if _mode(step) != "WALK":
+        contribution = _walk_step_seconds(step)
+        if contribution is None:
             continue
-        fact = step.get("transfer_semantics")
-        group_id = str(step.get("semantic_transfer_group_id") or "")
-        if isinstance(fact, dict) and group_id:
+        group_id, street_seconds, station_seconds = contribution
+        if group_id:
             if group_id in seen_groups:
                 continue
             seen_groups.add(group_id)
-            street += int(fact.get("street_walking_seconds") or 0)
-            in_station += int(fact.get("in_station_transfer_seconds") or 0)
-            continue
-        street += _walk_seconds(step)
+        street += street_seconds
+        in_station += station_seconds
     return street, in_station
+
+
+def _walk_step_seconds(step: dict) -> tuple[str | None, int, int] | None:
+    if _mode(step) != "WALK":
+        return None
+    fact = step.get("transfer_semantics")
+    group_id = str(step.get("semantic_transfer_group_id") or "")
+    if isinstance(fact, dict) and group_id:
+        return (
+            group_id,
+            int(fact.get("street_walking_seconds") or 0),
+            int(fact.get("in_station_transfer_seconds") or 0),
+        )
+    return None, _walk_seconds(step), 0
 
 
 def route_accessibility(route: list[dict]) -> str:
@@ -105,13 +146,25 @@ def route_accessibility(route: list[dict]) -> str:
         str(fact.get("accessibility") or "unknown")
         for fact in route_transfer_facts(route)
     ]
+    statuses.extend(_collect_transit_accessibility(route))
+    return _select_accessibility(statuses)
+
+
+def _collect_transit_accessibility(route: list[dict]) -> list[str]:
+    statuses: list[str] = []
     for step in route or []:
         if not _is_transit(step):
             continue
-        for side in ("departure", "arrival"):
-            for key in (f"{side}_accessibility", f"{side}_accessible"):
-                if key in step:
-                    statuses.append(_normalize_accessibility(step[key]))
+        statuses.extend(
+            _normalize_accessibility(step[key])
+            for side in ("departure", "arrival")
+            for key in (f"{side}_accessibility", f"{side}_accessible")
+            if key in step
+        )
+    return statuses
+
+
+def _select_accessibility(statuses: list[str]) -> str:
     if "inaccessible" in statuses:
         return "inaccessible"
     if statuses and all(status == "accessible" for status in statuses):
@@ -164,6 +217,24 @@ def _transfer_fact(
     }
 
 
+def _same_platform_ids(
+    from_id: str | None,
+    to_id: str | None,
+    from_is_parent: bool,
+    to_is_parent: bool,
+) -> bool:
+    # Exact authoritative PLATFORM id equality. Equal canonical parent ids
+    # (e.g. resolver-derived 'R14' == 'R14') are same_station, never silently
+    # promoted to a same-platform claim.
+    return bool(
+        from_id
+        and to_id
+        and from_id == to_id
+        and not from_is_parent
+        and not to_is_parent
+    )
+
+
 def _classify_transfer(
     from_id: str | None,
     to_id: str | None,
@@ -174,16 +245,7 @@ def _classify_transfer(
     from_is_parent: bool,
     to_is_parent: bool,
 ) -> str:
-    # Exact authoritative PLATFORM id equality. Equal canonical parent ids
-    # (e.g. resolver-derived 'R14' == 'R14') are same_station, never silently
-    # promoted to a same-platform claim.
-    if (
-        from_id
-        and to_id
-        and from_id == to_id
-        and not from_is_parent
-        and not to_is_parent
-    ):
+    if _same_platform_ids(from_id, to_id, from_is_parent, to_is_parent):
         return "same_platform"
     if from_parent and to_parent and from_parent == to_parent:
         return "same_station"
@@ -193,24 +255,10 @@ def _classify_transfer(
 
 
 def _accessibility(previous: dict, following: dict, gtfs: Any) -> str:
-    side_values: list[list[object]] = []
-    for step, side in ((previous, "arrival"), (following, "departure")):
-        values: list[object] = []
-        values.extend(
-            step.get(key)
-            for key in (
-                f"{side}_accessibility",
-                f"{side}_accessible",
-            )
-            if key in step
-        )
-        details = stop_details(gtfs, endpoint_id(step, side) or "")
-        values.extend(
-            details.get(key)
-            for key in ("accessibility", "accessible", "wheelchair_boarding")
-            if key in details
-        )
-        side_values.append(values)
+    side_values = [
+        _endpoint_accessibility_values(step, side, gtfs)
+        for step, side in ((previous, "arrival"), (following, "departure"))
+    ]
     normalized = [
         _normalize_accessibility(value)
         for values in side_values
@@ -221,6 +269,21 @@ def _accessibility(previous: dict, following: dict, gtfs: Any) -> str:
     if _all_sides_accessible(side_values):
         return "accessible"
     return "unknown"
+
+
+def _endpoint_accessibility_values(step: dict, side: str, gtfs: Any) -> list[object]:
+    values: list[object] = [
+        step.get(key)
+        for key in (f"{side}_accessibility", f"{side}_accessible")
+        if key in step
+    ]
+    details = stop_details(gtfs, endpoint_id(step, side) or "")
+    values.extend(
+        details.get(key)
+        for key in ("accessibility", "accessible", "wheelchair_boarding")
+        if key in details
+    )
+    return values
 
 
 def _all_sides_accessible(side_values: list[list[object]]) -> bool:
@@ -245,16 +308,16 @@ def _normalize_accessibility(value: object) -> str:
 def _walk_seconds(step: dict) -> int:
     value = step.get("duration_seconds")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return max(0, int(round(value)))
+        return max(0, round(value))
     dep = _parse_time(step.get("departure_time_iso"))
     arr = _parse_time(step.get("arrival_time_iso"))
     if dep is not None and arr is not None:
-        return max(0, int(round((arr - dep).total_seconds())))
+        return max(0, round((arr - dep).total_seconds()))
     start = _coords(step.get("start_point"))
     end = _coords(step.get("end_point"))
     if start is None or end is None:
         return 0
-    return max(0, int(round(geo.distance_meters(*start, *end) / WALK_SPEED_MPS)))
+    return max(0, round(geo.distance_meters(*start, *end) / WALK_SPEED_MPS))
 
 
 def _coords(value: object) -> tuple[float, float] | None:
@@ -272,7 +335,7 @@ def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
 
@@ -292,35 +355,59 @@ def _route_id(step: dict | None) -> str | None:
     return value or None
 
 
+def _pattern_index_callable(gtfs: Any, name: str):
+    method = getattr(getattr(gtfs, "_pattern_index", None), name, None)
+    return method if callable(method) else None
+
+
+def _parse_optional_id(*values: object) -> str | None:
+    current: object = ""
+    for value in values:
+        current = current or value
+    text = str(current or "").strip()
+    return text or None
+
+
 def endpoint_fields(step: dict, route_id: str | None, gtfs: Any) -> dict[str, Any]:
     """Annotate one transit step with canonical endpoint ids when available."""
+    resolved = _select_resolved_segment(step, route_id, gtfs)
+    if resolved is None:
+        return {}
+    return _project_resolver_parent_ids(step, resolved)
+
+
+def _select_resolved_segment(
+    step: dict, route_id: str | None, gtfs: Any
+) -> dict[str, Any] | None:
+    resolver = _pattern_index_callable(gtfs, "resolve_route_segment")
+    if resolver is None or not route_id:
+        return None
+    try:
+        resolved = resolver(
+            route_id,
+            step.get("departure_stop"),
+            step.get("arrival_stop"),
+            step.get("departure_coords"),
+            step.get("arrival_coords"),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return resolved if isinstance(resolved, dict) else None
+
+
+def _project_resolver_parent_ids(step: dict, resolved: dict) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    resolver = getattr(
-        getattr(gtfs, "_pattern_index", None), "resolve_route_segment", None
-    )
-    if callable(resolver) and route_id:
-        try:
-            resolved = resolver(
-                route_id,
-                step.get("departure_stop"),
-                step.get("arrival_stop"),
-                step.get("departure_coords"),
-                step.get("arrival_coords"),
-            )
-        except (AttributeError, TypeError, ValueError):
-            resolved = None
-        if isinstance(resolved, dict):
-            origin_id = resolved.get("origin_stop_id")
-            destination_id = resolved.get("destination_stop_id")
-            # Resolver ids are canonical parent station ids. Keep explicit
-            # platform ids authoritative and mark inferred ids as parents.
-            if origin_id and not endpoint_id(step, "departure"):
-                result["departure_stop_id"] = origin_id
-                result["departure_stop_is_parent"] = True
-            if destination_id and not endpoint_id(step, "arrival"):
-                result["arrival_stop_id"] = destination_id
-                result["arrival_stop_is_parent"] = True
-            result.setdefault("direction_id", resolved.get("direction_id"))
+    origin_id = resolved.get("origin_stop_id")
+    destination_id = resolved.get("destination_stop_id")
+    # Resolver ids are canonical parent station ids. Keep explicit
+    # platform ids authoritative and mark inferred ids as parents.
+    if origin_id and not endpoint_id(step, "departure"):
+        result["departure_stop_id"] = origin_id
+        result["departure_stop_is_parent"] = True
+    if destination_id and not endpoint_id(step, "arrival"):
+        result["arrival_stop_id"] = destination_id
+        result["arrival_stop_is_parent"] = True
+    result.setdefault("direction_id", resolved.get("direction_id"))
     return {key: value for key, value in result.items() if value not in (None, "")}
 
 
@@ -333,88 +420,79 @@ def endpoint_id(step: dict | None, side: str) -> str | None:
 
 def endpoint_identity(step: dict | None, side: str, gtfs: Any) -> dict[str, Any]:
     """Resolve one endpoint's canonical station identity."""
-    result: dict[str, Any] = {
-        "stop_id": endpoint_id(step, side),
-        "is_parent": False,
-        "parent": None,
-        "complex": None,
-    }
+    identity = _parse_endpoint_fields(step, side)
+    if not identity.stop_id:
+        return identity.as_dict()
+    if isinstance(step, dict) and step.get(f"{side}_stop_is_parent") is True:
+        return _project_marked_parent(identity, gtfs).as_dict()
+    lookup = _pattern_index_callable(gtfs, "identity_for_stop")
+    if lookup is not None:
+        return _project_indexed_identity(identity, lookup(identity.stop_id)).as_dict()
+    return _project_legacy_identity(identity, gtfs).as_dict()
+
+
+def _parse_endpoint_fields(step: dict | None, side: str) -> EndpointIdentity:
+    stop_id = endpoint_id(step, side)
     if not isinstance(step, dict):
-        return result
-    result["parent"] = str(step.get(f"{side}_parent_station") or "").strip() or None
-    result["complex"] = str(
-        step.get(f"{side}_station_complex_id")
-        or step.get(f"{side}_complex_id")
-        or ""
-    ).strip() or None
-    stop_id = result["stop_id"]
-    if not stop_id:
-        return result
+        return EndpointIdentity(stop_id=stop_id)
+    parent = _parse_optional_id(step.get(f"{side}_parent_station"))
+    complex_id = _parse_optional_id(
+        step.get(f"{side}_station_complex_id"), step.get(f"{side}_complex_id")
+    )
+    return EndpointIdentity(stop_id=stop_id, parent=parent, complex=complex_id)
 
-    marker = step.get(f"{side}_stop_is_parent")
-    if marker is True:
-        result["is_parent"] = True
-        if result["parent"] is None:
-            result["parent"] = stop_id
-        index = getattr(
-            getattr(gtfs, "_pattern_index", None), "identity_for_stop", None
+
+def _project_marked_parent(identity: EndpointIdentity, gtfs: Any) -> EndpointIdentity:
+    parent = identity.parent or identity.stop_id
+    lookup = _pattern_index_callable(gtfs, "identity_for_stop")
+    if lookup is None:
+        return replace(identity, is_parent=True, parent=parent)
+    indexed = lookup(identity.stop_id)
+    return replace(
+        identity,
+        is_parent=True,
+        parent=parent or indexed.get("parent_station"),
+        complex=identity.complex or indexed.get("station_complex_id"),
+    )
+
+
+def _project_indexed_identity(
+    identity: EndpointIdentity, indexed: Any
+) -> EndpointIdentity:
+    known = indexed.get("parent_station")
+    if known:
+        return replace(
+            identity,
+            parent=identity.parent or known,
+            complex=identity.complex or indexed.get("station_complex_id"),
+            is_parent=not indexed.get("is_platform", False),
         )
-        if callable(index):
-            identity = index(stop_id)
-            result["parent"] = result["parent"] or identity.get("parent_station")
-            result["complex"] = result["complex"] or identity.get(
-                "station_complex_id"
-            )
-        return result
+    # Unknown indexed stops cannot claim same_platform.
+    return replace(identity, is_parent=True)
 
-    index = getattr(
-        getattr(gtfs, "_pattern_index", None), "identity_for_stop", None
-    )
-    if callable(index):
-        identity = index(stop_id)
-        known = identity.get("parent_station")
-        if known:
-            result["parent"] = result["parent"] or known
-            result["complex"] = result["complex"] or identity.get(
-                "station_complex_id"
-            )
-            result["is_parent"] = not identity.get("is_platform", False)
-        else:
-            # Unknown indexed stops cannot claim same_platform.
-            result["is_parent"] = True
-        return result
 
-    details = stop_details(gtfs, stop_id)
-    result["parent"] = (
-        result["parent"]
-        or str(
-            details.get("parent_station") or details.get("parent_stop_id") or ""
-        ).strip()
-        or None
+def _project_legacy_identity(identity: EndpointIdentity, gtfs: Any) -> EndpointIdentity:
+    details = stop_details(gtfs, identity.stop_id or "")
+    parent = identity.parent or _parse_optional_id(
+        details.get("parent_station"), details.get("parent_stop_id")
     )
-    result["complex"] = (
-        result["complex"]
-        or str(
-            details.get("station_complex_id") or details.get("complex_id") or ""
-        ).strip()
-        or None
+    complex_id = identity.complex or _parse_optional_id(
+        details.get("station_complex_id"), details.get("complex_id")
     )
+    stop_id = identity.stop_id or ""
     is_parent = stop_id == stop_id.rstrip("NS")
-    result["is_parent"] = is_parent
-    if is_parent and result["parent"] is None:
-        result["parent"] = stop_id
-    return result
+    if is_parent and parent is None:
+        parent = identity.stop_id
+    return replace(identity, parent=parent, complex=complex_id, is_parent=is_parent)
 
 
 def stop_details(gtfs: Any, stop_id: str) -> dict[str, Any]:
     """Return canonical stop details from the attached index or legacy GTFS."""
     if not stop_id:
         return {}
-    index = getattr(
-        getattr(gtfs, "_pattern_index", None), "identity_for_stop", None
-    )
-    if callable(index):
-        identity = index(stop_id)
+    lookup = _pattern_index_callable(gtfs, "identity_for_stop")
+    if lookup is not None:
+        identity = lookup(stop_id)
         parent = identity.get("parent_station")
         if not parent:
             return {}

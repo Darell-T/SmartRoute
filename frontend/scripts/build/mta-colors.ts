@@ -1,9 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { JsonValue } from "./types.ts";
 
 // Build-script view of the single MTA color source (lib/mta-colors.json).
 // Runtime and build code share this source while legacy .mjs builders migrate.
-function readMtaRouteColors(): Record<string, string> {
+const OBJECT_TAG = "[object Object]";
+const STRING_TAG = "[object String]";
+const jsonTag = Object.prototype.toString;
+
+function readMtaRouteColors() {
   const candidates = [
     resolve(process.cwd(), "lib/mta-colors.json"),
     resolve(process.cwd(), "frontend/lib/mta-colors.json"),
@@ -12,10 +17,22 @@ function readMtaRouteColors(): Record<string, string> {
   if (!file) {
     throw new Error("Could not locate frontend/lib/mta-colors.json");
   }
-  return JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+  const parsed: JsonValue = JSON.parse(readFileSync(file, "utf8"));
+  if (!((parsed)
+    != null && jsonTag.call((parsed)) === OBJECT_TAG)) {
+    throw new Error("frontend/lib/mta-colors.json must be a JSON object");
+  }
+  const colors: Record<string, string> = {};
+  for (const [routeId, value] of Object.entries(parsed)) {
+    if (!(jsonTag.call((value)) === STRING_TAG)) {
+      throw new Error(`frontend/lib/mta-colors.json value for ${routeId} must be a string`);
+    }
+    colors[routeId] = value;
+  }
+  return colors;
 }
 
-export const MTA_ROUTE_COLORS: Record<string, string> = readMtaRouteColors();
+export const MTA_ROUTE_COLORS = readMtaRouteColors();
 
 // Build-side default. Unknown ids fall back to neutral gray so a stray service
 // id never crashes a build (the runtime uses its own gold fallback for trips).

@@ -1,4 +1,5 @@
-import type { RouteCandidate, RouteStep, ServiceAlert, TripResponse } from "@/types";
+import type { RouteStep, ServiceAlert } from "@/types";
+import type { ValidatedTripResponse } from "./trip-response";
 
 /** Rail-capable transit step types accepted across the card, API, and map. */
 export const TRANSIT_STEP_TYPES: ReadonlySet<RouteStep["type"]> = new Set([
@@ -24,29 +25,14 @@ export function deriveTransitRouteIds(steps: RouteStep[] = []) {
   return Array.from(ids);
 }
 
-export function normalizeTripCandidates(response: TripResponse) {
-  const candidates = response.route_candidates;
-  if (!Array.isArray(candidates) || candidates.length === 0) return null;
-  if (typeof response.selected_route_index !== "number") return null;
-
-  const normalized = candidates.filter(
-    (candidate): candidate is RouteCandidate =>
-      Boolean(
-        candidate.id &&
-          candidate.itinerary?.itinerary_id &&
-          Array.isArray(candidate.steps) &&
-          typeof candidate.index === "number" &&
-          typeof candidate.total_minutes === "number" &&
-          typeof candidate.score_breakdown?.transfers === "number",
-      ),
-  );
-  const selected = normalized.find(
+export function normalizeTripCandidates(response: ValidatedTripResponse) {
+  const selected = response.route_candidates.find(
     (candidate) => candidate.index === response.selected_route_index,
   );
   if (!selected) return null;
 
   return {
-    candidates: normalized,
+    candidates: response.route_candidates,
     selected,
     selectedIndex: response.selected_route_index,
   };

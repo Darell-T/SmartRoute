@@ -10,7 +10,8 @@ type LaneInput = {
   from_anchor_id: string | null;
   to_anchor_id: string | null;
   coordinates: Position[];
-  [key: string]: unknown;
+  materialized_bundle_id?: string | null;
+  bundle_materialization_role?: string;
 };
 
 function lane({ bundle_id, color, from_anchor_id, to_anchor_id, coordinates, ...props }: LaneInput) {
@@ -31,7 +32,7 @@ function lane({ bundle_id, color, from_anchor_id, to_anchor_id, coordinates, ...
 test("buildBranchTransitions returns { transitions, coincidentSkipped } shape", () => {
   const result = buildBranchTransitions([], { maxBridgeM: 90 });
   assert.ok(Array.isArray(result.transitions));
-  assert.equal(typeof result.coincidentSkipped, "number");
+  assert.equal(result.coincidentSkipped, Number(result.coincidentSkipped));
 });
 
 test("buildBranchTransitions connects two same-color lanes meeting at one anchor", () => {

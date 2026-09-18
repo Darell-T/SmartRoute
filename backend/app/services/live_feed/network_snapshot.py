@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Awaitable, Callable, Mapping
 
 from app.services.mta.alerts import (
     fetch_service_alerts,
@@ -20,7 +20,7 @@ from app.services.mta.alerts import (
 )
 from app.services.mta.config import ALL_SUBWAY_ROUTES, route_to_feed
 from app.services.mta.feeds import fetch_feeds_with_metadata, parse_bytes
-from app.services.mta.subway import _build_subway_vehicle_positions
+from app.services.mta.subway import build_subway_vehicle_positions
 
 
 @dataclass(frozen=True)
@@ -36,27 +36,41 @@ class NetworkSnapshot:
     feed_count: int
 
 
-def _normalize_network_data(
-    feed_rows: list[dict],
-    raw_alerts: bytes,
-    generation: int,
-) -> NetworkSnapshot:
-    """Parse all feeds sequentially in one worker instead of per-client pools."""
-
-    trip_updates: list[dict] = []
-    for feed in feed_rows:
-        trip_updates.extend(parse_bytes(feed["content"]))
-    arrival_lookup = {
+def _arrival_lookup(
+    trip_updates: list[dict],
+) -> dict[tuple[str, str], int]:
+    return {
         (str(update["trip_id"]), str(update["stop_id"])): int(update["arrival_time"])
         for update in trip_updates
         if update.get("trip_id") and update.get("stop_id") and update.get("arrival_time")
     }
 
-    requested_routes = set(ALL_SUBWAY_ROUTES)
-    vehicles, vehicle_debug = _build_subway_vehicle_positions(
+
+def _freeze_alert_records(
+    alerts: list,
+) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        MappingProxyType({
+            **alert,
+            "route_ids": tuple(alert.get("route_ids") or ()),
+            "stop_ids": tuple(alert.get("stop_ids") or ()),
+        })
+        for alert in alerts
+    )
+
+
+def _normalize_network_data(
+    feed_rows: list[dict],
+    raw_alerts: bytes,
+    generation: int,
+) -> NetworkSnapshot:
+    trip_updates: list[dict] = []
+    for feed in feed_rows:
+        trip_updates.extend(parse_bytes(feed["content"]))
+    vehicles, vehicle_debug = build_subway_vehicle_positions(
         feed_rows,
-        {route for route in requested_routes if route in route_to_feed},
-        requested_routes,
+        {route for route in ALL_SUBWAY_ROUTES if route in route_to_feed},
+        ALL_SUBWAY_ROUTES,
         True,
         True,
     )
@@ -68,25 +82,11 @@ def _normalize_network_data(
         generation=generation,
         updated_at=int(time.time()),
         trip_updates=tuple(MappingProxyType(dict(update)) for update in trip_updates),
-        arrival_lookup=MappingProxyType(arrival_lookup),
+        arrival_lookup=MappingProxyType(_arrival_lookup(trip_updates)),
         vehicles=tuple(MappingProxyType(dict(vehicle)) for vehicle in vehicles),
         vehicle_debug=MappingProxyType(dict(vehicle_debug)),
-        alerts=tuple(
-            MappingProxyType({
-                **alert,
-                "route_ids": tuple(alert.get("route_ids") or ()),
-                "stop_ids": tuple(alert.get("stop_ids") or ()),
-            })
-            for alert in alerts
-        ),
-        service_alerts=tuple(
-            MappingProxyType({
-                **alert,
-                "route_ids": tuple(alert.get("route_ids") or ()),
-                "stop_ids": tuple(alert.get("stop_ids") or ()),
-            })
-            for alert in service_alerts
-        ),
+        alerts=_freeze_alert_records(alerts),
+        service_alerts=_freeze_alert_records(service_alerts),
         feed_count=len(feed_rows),
     )
 
@@ -114,8 +114,6 @@ async def build_network_snapshot(generation: int) -> NetworkSnapshot:
 
 
 class NetworkSnapshotStore:
-    """Own exactly one current generation and one optional in-flight build."""
-
     def __init__(
         self,
         builder: Callable[[int], Awaitable[NetworkSnapshot]] = build_network_snapshot,
@@ -136,11 +134,9 @@ class NetworkSnapshotStore:
         return self._refresh_event
 
     def note_demand(self) -> None:
-        """Record that a rider-facing caller needs live network updates."""
         self._last_demand_at = time.monotonic()
 
     def has_recent_demand(self, max_idle_seconds: float) -> bool:
-        """Return whether a rider-facing caller was active within the window."""
         last_demand = self._last_demand_at
         return (
             last_demand is not None

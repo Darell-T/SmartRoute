@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timezone, timedelta
+from datetime import timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:

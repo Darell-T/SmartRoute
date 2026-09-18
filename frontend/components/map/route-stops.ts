@@ -3,7 +3,7 @@
 // driven purely by step data, unlike the animation-time DOM markers.
 // Feature building lives in route-stops-features.ts (pure, node-testable).
 
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl/dist/maplibre-gl.mjs";
 import type { RouteStep } from "@/types";
 import { getLineColor } from "./route-layers";
 import {

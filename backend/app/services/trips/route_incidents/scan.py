@@ -10,15 +10,24 @@ incident_index_adapter.
 
 from __future__ import annotations
 
+import logging
 import time
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from app.services.incidents import index as incident_index
-from app.services.trips.route_incidents.context import CandidateStopContext, extract_candidate_stop_context
-from app.services.trips.route_incidents.index_adapter import extract_lookup_context, project_records
+from app.services.trips.route_incidents.context import (
+    CandidateStopContext,
+    extract_candidate_stop_context,
+)
+from app.services.trips.route_incidents.index_adapter import (
+    extract_lookup_context,
+    project_records,
+)
 
 COMPLETE_INCIDENT_SCAN_STATUS = "complete"
+_LOGGER = logging.getLogger(__name__)
 
 # Single canonical rider disclosure for incomplete incident coverage. The
 # agent projection and the direct Live Map path both import this exact
@@ -93,8 +102,11 @@ async def scan_route_incidents(
             route_ids=route_ids,
             coverage_ids=coverage_ids,
         )
-    except Exception as exc:
-        print(f"[trip] incident index lookup failed: {type(exc).__name__}")
+    except Exception as exc:  # noqa: BLE001 incident-index faults stay unavailable
+        _LOGGER.warning(
+            "[trip] incident index lookup failed: %s",
+            type(exc).__name__,
+        )
         return {
             "incidents": [],
             "warnings": [],
@@ -121,29 +133,39 @@ async def scan_route_incidents(
     }
 
 
+def _subway_pattern_intermediates(index: object, step: Mapping[str, Any]) -> list[dict] | None:
+    if index is None or not step.get("route_id"):
+        return None
+    try:
+        rows, _meta = index.get_intermediate_stops_with_coords(
+            step["route_id"],
+            step.get("departure_stop"),
+            step.get("arrival_stop"),
+            step.get("departure_coords"),
+            step.get("arrival_coords"),
+        )
+    except Exception:  # noqa: BLE001 pattern-index faults omit intermediates
+        return None
+    if not rows:
+        return None
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def _with_static_intermediates(index: object, step: Mapping[str, Any]) -> dict:
+    copied = dict(step)
+    if copied.get("type") != "SUBWAY":
+        return copied
+    rows = _subway_pattern_intermediates(index, copied)
+    if rows:
+        copied["intermediate_stop_locations"] = rows
+    return copied
+
+
 def build_candidate_stop_context(gtfs: Any, routes: list[list[dict]]) -> list[CandidateStopContext]:
     """Cover every static intermediate transit stop without request-time DB work."""
     index = getattr(gtfs, "_pattern_index", None) if gtfs else None
-    context_routes: list[list[dict]] = []
-    for route in routes or []:
-        copied_route: list[dict] = []
-        for original in route or []:
-            step = dict(original)
-            if step.get("type") == "SUBWAY" and index and step.get("route_id"):
-                try:
-                    rows, _meta = index.get_intermediate_stops_with_coords(
-                        step["route_id"],
-                        step.get("departure_stop"),
-                        step.get("arrival_stop"),
-                        step.get("departure_coords"),
-                        step.get("arrival_coords"),
-                    )
-                except Exception:
-                    rows = []
-                if rows:
-                    step["intermediate_stop_locations"] = [
-                        dict(row) for row in rows if isinstance(row, dict)
-                    ]
-            copied_route.append(step)
-        context_routes.append(copied_route)
+    context_routes = [
+        [_with_static_intermediates(index, step) for step in route or []]
+        for route in routes or []
+    ]
     return extract_candidate_stop_context(context_routes)

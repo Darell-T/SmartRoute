@@ -6,12 +6,15 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.services.mta.alerts import project_service_alert
-from app.services.agent.tools.transit.direction import normalize_direction, stop_id_direction
+from app.services.agent.tools.transit.direction import (
+    normalize_direction,
+    stop_id_direction,
+)
 from app.services.agent.tools.transit.evidence_matching import (
     normalized_route_ids,
     normalized_text,
 )
+from app.services.mta.alerts import project_service_alert
 
 
 def safe_result(
@@ -25,6 +28,21 @@ def safe_result(
     }
     if "stop" in row:
         result["stop"] = safe_stop(row.get("stop"))
+    directions, matched_direction = _safe_direction_groups(
+        row, requested_direction
+    )
+    result["directions"] = directions
+    catchability = row.get("catchability")
+    if requested_direction and matched_direction and isinstance(catchability, dict):
+        projected = _safe_catchability(catchability, directions)
+        if projected is not None:
+            result["catchability"] = projected
+    return result
+
+
+def _safe_direction_groups(
+    row: dict[str, Any], requested_direction: str | None
+) -> tuple[list[dict[str, Any]], bool]:
     directions = []
     matched_direction = False
     for group in row.get("directions") or []:
@@ -37,51 +55,36 @@ def safe_result(
             continue
         if requested_direction:
             matched_direction = True
-        safe_arrivals = []
-        for item in group.get("arrivals") or []:
-            if isinstance(item, dict):
-                safe_arrivals.append(
-                    {
-                        key: item[key]
-                        for key in ("expected_at", "minutes", "realtime")
-                        if key in item
-                    }
-                )
         directions.append(
             {
                 "id": group.get("id"),
                 "label": group.get("label"),
-                "arrivals": safe_arrivals,
+                "arrivals": _safe_group_arrivals(group),
             }
         )
-    result["directions"] = directions
-    catchability = row.get("catchability")
-    if requested_direction and matched_direction and isinstance(catchability, dict):
-        projected = _safe_catchability(catchability, directions)
-        if projected is not None:
-            result["catchability"] = projected
-    return result
+    return directions, matched_direction
+
+
+def _safe_group_arrivals(group: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            key: item[key]
+            for key in ("expected_at", "minutes", "realtime")
+            if key in item
+        }
+        for item in group.get("arrivals") or []
+        if isinstance(item, dict)
+    ]
 
 
 def _safe_catchability(
     catchability: dict[str, Any], directions: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
-    """Re-derive catchability from the direction-filtered predictions."""
-
     walking = _integer(catchability.get("walking_minutes"))
     buffer = _integer(catchability.get("boarding_buffer_minutes"))
     if walking is None or buffer is None:
         return None
-    minutes = sorted(
-        {
-            parsed
-            for direction in directions
-            for arrival in direction.get("arrivals") or []
-            if isinstance(arrival, dict)
-            for parsed in [_integer(arrival.get("minutes"))]
-            if parsed is not None and parsed > 0
-        }
-    )
+    minutes = _positive_arrival_minutes(directions)
     threshold = max(0, walking) + max(0, buffer)
     safe = {
         "walking_minutes": max(0, walking),
@@ -94,6 +97,19 @@ def _safe_catchability(
     if "confidence" in catchability:
         safe["confidence"] = catchability["confidence"] if minutes else 0.0
     return safe
+
+
+def _positive_arrival_minutes(directions: list[dict[str, Any]]) -> list[int]:
+    return sorted(
+        {
+            parsed
+            for direction in directions
+            for arrival in direction.get("arrivals") or []
+            if isinstance(arrival, dict)
+            for parsed in [_integer(arrival.get("minutes"))]
+            if parsed is not None and parsed > 0
+        }
+    )
 
 
 def _integer(value: object) -> int | None:
@@ -109,63 +125,79 @@ def operation_facts(operation: str, row: dict[str, Any]) -> dict[str, Any]:
     """Keep only passenger-presentable fields for non-arrival operations."""
 
     if operation == "fact":
-        source = row.get("source") if isinstance(row.get("source"), dict) else {}
-        return {
-            "topic": normalized_text(row.get("topic")),
-            "text": normalized_text(row.get("text"))[:1600],
-            "source": {
-                key: source[key]
-                for key in ("name", "effective_date", "version")
-                if key in source
-            },
-        }
+        return _fact_fields(row)
     if operation == "area_conditions":
-        return {
-            "area": normalized_text(row.get("area") or row.get("resolved_area")),
-            "incidents": [
-                _safe_named_item(item, ("severity", "category", "start_iso"))
-                for item in (row.get("incidents") or [])[:8]
-                if isinstance(item, dict)
-            ],
-            "events": [
-                _safe_named_item(
-                    item,
-                    ("category", "venue_name", "start_iso", "estimated_end_iso"),
-                )
-                for item in (row.get("events") or [])[:8]
-                if isinstance(item, dict)
-            ],
-            "incident_status": _evidence_status(row.get("incident_evidence")),
-            "event_status": _evidence_status(row.get("event_evidence")),
-        }
+        return _area_condition_fields(row)
     if operation == "event_schedule":
-        return {
-            "events": [
-                _safe_named_item(
-                    item,
-                    ("venue_name", "start_iso", "estimated_end_iso"),
-                )
-                for item in (row.get("events") or [])[:8]
-                if isinstance(item, dict)
-            ],
-            "note": normalized_text(row.get("note"))[:300],
-        }
+        return _event_schedule_fields(row)
     if operation == "venue_crowd_window":
-        return {
-            key: row[key]
-            for key in (
-                "venue",
-                "surge_start_iso",
-                "surge_end_iso",
-                "pre_event_start_iso",
-                "pre_event_end_iso",
-                "stations",
-                "lines",
-                "is_heuristic",
-            )
-            if key in row
-        }
+        return _venue_crowd_fields(row)
     return {}
+
+
+def _fact_fields(row: dict[str, Any]) -> dict[str, Any]:
+    source = row.get("source") if isinstance(row.get("source"), dict) else {}
+    return {
+        "topic": normalized_text(row.get("topic")),
+        "text": normalized_text(row.get("text"))[:1600],
+        "source": {
+            key: source[key]
+            for key in ("name", "effective_date", "version")
+            if key in source
+        },
+    }
+
+
+def _area_condition_fields(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "area": normalized_text(row.get("area") or row.get("resolved_area")),
+        "incidents": [
+            _safe_named_item(item, ("severity", "category", "start_iso"))
+            for item in (row.get("incidents") or [])[:8]
+            if isinstance(item, dict)
+        ],
+        "events": [
+            _safe_named_item(
+                item,
+                ("category", "venue_name", "start_iso", "estimated_end_iso"),
+            )
+            for item in (row.get("events") or [])[:8]
+            if isinstance(item, dict)
+        ],
+        "incident_status": _evidence_status(row.get("incident_evidence")),
+        "event_status": _evidence_status(row.get("event_evidence")),
+    }
+
+
+def _event_schedule_fields(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "events": [
+            _safe_named_item(
+                item,
+                ("venue_name", "start_iso", "estimated_end_iso"),
+            )
+            for item in (row.get("events") or [])[:8]
+            if isinstance(item, dict)
+        ],
+        "note": normalized_text(row.get("note"))[:300],
+    }
+
+
+def _venue_crowd_fields(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: row[key]
+        for key in (
+            "venue",
+            "surge_start_iso",
+            "surge_end_iso",
+            "pre_event_start_iso",
+            "pre_event_end_iso",
+            "stations",
+            "lines",
+            "is_heuristic",
+        )
+        if key in row
+    }
 
 
 def renderable_arrival_card(row: dict[str, Any]) -> bool:
@@ -182,20 +214,13 @@ def renderable_arrival_card(row: dict[str, Any]) -> bool:
 
 def accessibility_text(evidence: dict[str, Any], unknowns: tuple[str, ...]) -> str:
     accessibility = evidence.get("accessibility")
-    binding = accessibility.get("binding") if isinstance(accessibility, dict) else None
-    if not isinstance(binding, dict) and isinstance(accessibility, dict):
-        binding = accessibility
+    binding = _accessibility_binding_row(accessibility)
     if isinstance(binding, dict) and (
         str(binding.get("entity_type") or "").upper() == "BUS_STOP"
         or str(binding.get("mode") or "").upper() == "BUS"
     ):
         return "Accessibility information is unavailable for that bus stop."
-    station_name = (
-        str(binding.get("station") or "").strip()
-        if isinstance(binding, dict)
-        else ""
-    ) or str(accessibility.get("station_matched") or "").strip()
-    subject = station_name or "The station"
+    subject = _accessibility_subject(binding, accessibility)
     outages = accessibility.get("elevator_outages") if isinstance(accessibility, dict) else []
     if outages:
         return f"{subject} has {len(outages)} reported elevator outage(s)."
@@ -204,39 +229,68 @@ def accessibility_text(evidence: dict[str, Any], unknowns: tuple[str, ...]) -> s
     return f"No elevator outages were reported at {subject}."
 
 
+def _accessibility_binding_row(accessibility: object) -> dict[str, Any] | None:
+    binding = accessibility.get("binding") if isinstance(accessibility, dict) else None
+    if not isinstance(binding, dict) and isinstance(accessibility, dict):
+        binding = accessibility
+    return binding if isinstance(binding, dict) else None
+
+def _accessibility_subject(
+    binding: dict[str, Any] | None, accessibility: object
+) -> str:
+    station_name = (
+        str(binding.get("station") or "").strip() if isinstance(binding, dict) else ""
+    )
+    if not station_name and isinstance(accessibility, dict):
+        station_name = str(accessibility.get("station_matched") or "").strip()
+    return station_name or "The station"
+
+
 def operation_facts_text(operation: str, facts: dict[str, Any]) -> str:
     if operation == "fact":
         return str(facts.get("text") or "That transit fact is unavailable.")
     if operation == "area_conditions":
-        area = str(facts.get("area") or "the checked area")
-        rows = [
-            *_named_lines("Incident", facts.get("incidents")),
-            *_named_lines("Event", facts.get("events")),
-        ]
-        if rows:
-            return "\n".join([f"Current conditions near {area}:", *rows])
-        statuses = {
-            str(facts.get("incident_status") or "unknown"),
-            str(facts.get("event_status") or "unknown"),
-        }
-        if statuses == {"complete"}:
-            return f"No matching incident or event reports were returned near {area}."
-        return f"Current condition coverage near {area} is incomplete."
+        return _area_conditions_text(facts)
     if operation == "event_schedule":
-        rows = _event_lines(facts.get("events"))
-        return (
-            "\n".join(["Things happening nearby:", *rows])
-            if rows
-            else "I didn't find matching events for that schedule."
-        )
+        return _event_schedule_text(facts)
     if operation == "venue_crowd_window":
-        venue = str(facts.get("venue") or "the venue")
-        start = str(facts.get("surge_start_iso") or "").strip()
-        end = str(facts.get("surge_end_iso") or "").strip()
-        if start and end:
-            return f"Estimated post-event crowd pressure near {venue}: {start} to {end}."
-        return f"A crowd window is unavailable for {venue}."
+        return _venue_crowd_text(facts)
     return "Transit information is unavailable for that request."
+
+
+def _area_conditions_text(facts: dict[str, Any]) -> str:
+    area = str(facts.get("area") or "the checked area")
+    rows = [
+        *_named_lines("Incident", facts.get("incidents")),
+        *_named_lines("Event", facts.get("events")),
+    ]
+    if rows:
+        return "\n".join([f"Current conditions near {area}:", *rows])
+    statuses = {
+        str(facts.get("incident_status") or "unknown"),
+        str(facts.get("event_status") or "unknown"),
+    }
+    if statuses == {"complete"}:
+        return f"No matching incident or event reports were returned near {area}."
+    return f"Current condition coverage near {area} is incomplete."
+
+
+def _event_schedule_text(facts: dict[str, Any]) -> str:
+    rows = _event_lines(facts.get("events"))
+    return (
+        "\n".join(["Things happening nearby:", *rows])
+        if rows
+        else "I didn't find matching events for that schedule."
+    )
+
+
+def _venue_crowd_text(facts: dict[str, Any]) -> str:
+    venue = str(facts.get("venue") or "the venue")
+    start = str(facts.get("surge_start_iso") or "").strip()
+    end = str(facts.get("surge_end_iso") or "").strip()
+    if start and end:
+        return f"Estimated post-event crowd pressure near {venue}: {start} to {end}."
+    return f"A crowd window is unavailable for {venue}."
 
 
 def _named_lines(label: str, value: object) -> list[str]:
@@ -270,7 +324,7 @@ def _event_start_text(value: object) -> str:
     if not raw:
         return ""
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw)
         if parsed.tzinfo is not None:
             parsed = parsed.astimezone(ZoneInfo("America/New_York"))
     except ValueError:
@@ -294,6 +348,10 @@ def arrivals_text(evidence: dict[str, Any], routes: str) -> str:
     if count:
         return f"I found {count} upcoming arrival estimate(s) for {routes}."
     statuses = {str(row.get("source_status") or "").casefold() for row in rows}
+    return _arrival_gap_text(statuses, routes)
+
+
+def _arrival_gap_text(statuses: set[str], routes: str) -> str:
     if statuses and statuses <= {"no_predictions"}:
         return f"No upcoming arrivals were returned for {routes} in the available information."
     if "stale" in statuses:
@@ -349,29 +407,33 @@ def safe_accessibility(row: dict[str, Any]) -> dict[str, Any]:
         result["observed_at"] = observed
     binding = row.get("binding")
     if not isinstance(binding, dict):
-        top_level_binding = {
+        binding = {
             key: row[key]
             for key in ("mode", "entity_type", "station", "station_id")
             if key in row and row[key] not in (None, "", [])
-        }
-        binding = top_level_binding or None
-    if isinstance(binding, dict):
-        safe_binding = {
-            key: binding[key]
-            for key in (
-                "bound",
-                "card_id",
-                "route_ids",
-                "mode",
-                "station",
-                "station_id",
-                "entity_type",
-            )
-            if key in binding and binding[key] not in (None, "", [])
-        }
-        if safe_binding:
-            result["binding"] = safe_binding
+        } or None
+    safe_binding = _safe_binding(binding)
+    if safe_binding:
+        result["binding"] = safe_binding
     return result
+
+
+def _safe_binding(binding: object) -> dict[str, Any]:
+    if not isinstance(binding, dict):
+        return {}
+    return {
+        key: binding[key]
+        for key in (
+            "bound",
+            "card_id",
+            "route_ids",
+            "mode",
+            "station",
+            "station_id",
+            "entity_type",
+        )
+        if key in binding and binding[key] not in (None, "", [])
+    }
 
 
 def safe_alert(row: dict[str, Any]) -> dict[str, Any]:
@@ -411,16 +473,8 @@ def safe_unconfirmed_signal(row: object) -> dict[str, Any]:
 
     source = row if isinstance(row, dict) else {}
     mode = normalized_text(source.get("mode")).casefold()
-    supplied_kind = normalized_text(source.get("kind"))
-    default_kind = (
-        "stalled_train"
-        if mode in {"subway", "train"}
-        else "stalled_bus"
-        if mode == "bus"
-        else "possible_delay"
-    )
     result = {
-        "kind": supplied_kind or default_kind,
+        "kind": normalized_text(source.get("kind")) or _default_signal_kind(mode),
         "route_id": normalized_text(source.get("route_id")).upper(),
         "stop_id": normalized_text(source.get("stop_id")),
         "reason": normalized_text(source.get("reason")) or "stale vehicle timestamp",
@@ -428,11 +482,7 @@ def safe_unconfirmed_signal(row: object) -> dict[str, Any]:
     }
     if mode:
         result["mode"] = mode
-    observed = normalized_text(
-        source.get("observed_at")
-        or source.get("time_recorded")
-        or source.get("updated_at")
-    )
+    observed = _signal_observed_at(source)
     if observed:
         result["observed_at"] = observed
     direction = row_direction(source)
@@ -441,6 +491,22 @@ def safe_unconfirmed_signal(row: object) -> dict[str, Any]:
     if direction:
         result["direction"] = direction
     return {key: value for key, value in result.items() if value not in (None, "")}
+
+
+def _default_signal_kind(mode: str) -> str:
+    if mode in {"subway", "train"}:
+        return "stalled_train"
+    if mode == "bus":
+        return "stalled_bus"
+    return "possible_delay"
+
+
+def _signal_observed_at(source: dict[str, Any]) -> str:
+    return normalized_text(
+        source.get("observed_at")
+        or source.get("time_recorded")
+        or source.get("updated_at")
+    )
 
 
 def row_direction(row: dict[str, Any]) -> str | None:

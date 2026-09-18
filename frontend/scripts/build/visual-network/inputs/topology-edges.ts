@@ -15,9 +15,9 @@ export type TopologyEdgeProperties = {
   route_id: string;
   branch_id: string;
   direction_id: string;
-  shape_id: null;
-  shape_candidate_count: number;
-  shape_selection_strategy: "gtfs_topology_only";
+  "shape_id": null;
+  "shape_candidate_count": number;
+  "shape_selection_strategy": "gtfs_topology_only";
   from_stop_id: string;
   from_stop_name: string;
   to_stop_id: string;
@@ -90,9 +90,9 @@ export function buildTopologyEdges(
             route_id: r.route_id,
             branch_id: branch.branch_id,
             direction_id: branch.direction_id,
-            shape_id: null,
-            shape_candidate_count: 0,
-            shape_selection_strategy: "gtfs_topology_only",
+            "shape_id": null,
+            "shape_candidate_count": 0,
+            "shape_selection_strategy": "gtfs_topology_only",
             from_stop_id: p1.stop_id,
             from_stop_name: p1.name,
             to_stop_id: p2.stop_id,

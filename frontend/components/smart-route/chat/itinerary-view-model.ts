@@ -6,17 +6,19 @@
  * never recomputed by the card component.
  */
 
-import type { RecommendationReason, RouteCard } from "@/lib/agent-chat-stream";
+import type {
+  CanonicalItinerary,
+  RecommendationReason,
+  RouteCard,
+} from "@/lib/agent-chat/stream";
 import { formatNycRouteClock } from "@/lib/nyc-route-clock";
 import { SUBWAY_BULLET_ROUTES } from "@/components/smart-route/train-bullet";
 import {
   buildEventsFromCanonicalItinerary,
   canonicalPlaceLabel,
-  condensePreviewEvents,
   durationMinutesFromSeconds,
   formatDurationMinutes,
   type ItineraryEvent,
-  type ItineraryEventKind,
 } from "./itinerary-event-adapter";
 
 export {
@@ -65,7 +67,7 @@ function firstLegArrivalLabel(card: RouteCard): string | null {
   const routeId = context?.route_id?.trim();
   if (
     !routeId ||
-    typeof minutes !== "number" ||
+    minutes == null ||
     !Number.isFinite(minutes) ||
     !["live", "scheduled"].includes(context?.source_status ?? "")
   ) {
@@ -83,47 +85,49 @@ export function parseRationale(reason: string | undefined | null): string[] {
     .filter(Boolean);
 }
 
+function structuredFastestCopy(
+  reason: Extract<RecommendationReason, { code: "fastest" }>,
+): string {
+  const seconds =
+    reason.difference_seconds != null && Number.isFinite(reason.difference_seconds)
+      ? Math.max(0, reason.difference_seconds)
+      : 0;
+  if (seconds >= 60) return `About ${Math.round(seconds / 60)} min faster than the next option`;
+  return "Fastest available route";
+}
+
+function structuredFewerTransfersCopy(
+  reason: Extract<RecommendationReason, { code: "fewer_transfers" }>,
+): string | null {
+  const difference = Math.max(0, reason.transfer_difference);
+  if (!difference) return null;
+  return `Uses ${difference} fewer ${difference === 1 ? "transfer" : "transfers"}`;
+}
+
+const STRUCTURED_REASON_COPY = new Map<string, string>(
+  Object.entries({
+    less_walking: "Less walking than the other options",
+    avoids_active_disruption: "Avoids active service alerts on another option",
+    lower_event_crowd_exposure: "Lower exposure to nearby event crowds",
+    accessibility: "Meets the accessibility requirement",
+    reasonable_local_option: "Nearby option with a reasonable overall trip",
+  }),
+);
+
 export function formatStructuredRecommendationReason(
   reason: RecommendationReason | string | unknown,
 ): string | null {
   if (typeof reason === "string") return reason.trim() || null;
   if (!reason || typeof reason !== "object" || !("code" in reason)) return null;
   const structured = reason as RecommendationReason;
-  if (structured.code === "fastest") {
-    const seconds =
-      typeof structured.difference_seconds === "number" &&
-      Number.isFinite(structured.difference_seconds)
-        ? Math.max(0, structured.difference_seconds)
-        : 0;
-    return seconds >= 60
-      ? `About ${Math.round(seconds / 60)} min faster than the next option`
-      : "Fastest available route";
-  }
-  if (structured.code === "fewer_transfers") {
-    const difference = Math.max(0, structured.transfer_difference);
-    return difference
-      ? `Uses ${difference} fewer ${difference === 1 ? "transfer" : "transfers"}`
-      : null;
-  }
-  if (structured.code === "less_walking") {
-    return "Less walking than the other options";
-  }
-  if (structured.code === "avoids_active_disruption") {
-    return "Avoids active service alerts on another option";
-  }
-  if (structured.code === "lower_event_crowd_exposure") {
-    return "Lower exposure to nearby event crowds";
-  }
-  if (structured.code === "accessibility") {
-    return "Meets the accessibility requirement";
-  }
-  if (structured.code === "reasonable_local_option") {
-    return "Nearby option with a reasonable overall trip";
-  }
-  return null;
+  if (structured.code === "fastest") return structuredFastestCopy(structured);
+  if (structured.code === "fewer_transfers") return structuredFewerTransfersCopy(structured);
+  return STRUCTURED_REASON_COPY.get(structured.code) ?? null;
 }
 
-function isValidCard(card: RouteCard): boolean {
+function isValidCard(
+  card: RouteCard,
+): card is RouteCard & { itinerary: CanonicalItinerary } {
   return Boolean(
     card &&
       card.card_id &&
@@ -140,7 +144,7 @@ function cardTotalMinutes(card: RouteCard): number {
 
 function cardTransferCount(card: RouteCard): number {
   const canonical = card.itinerary?.transfer_count;
-  return typeof canonical === "number" && Number.isFinite(canonical)
+  return canonical != null && Number.isFinite(canonical)
     ? Math.max(0, Math.round(canonical))
     : 0;
 }
@@ -155,6 +159,55 @@ function buildMetaParts(transferCount: number, dwellMinutes: number): string[] {
   return parts;
 }
 
+function unavailableItineraryViewModel(
+  card: RouteCard | undefined,
+  primaryActionLabel: string,
+  secondaryActionLabel: string,
+): ItineraryViewModel {
+  return {
+    id: card?.card_id ?? "invalid",
+    recommended: card?.role === "recommended",
+    placeNames: [],
+    arrivalLabel: null,
+    firstLegArrivalLabel: null,
+    durationLabel: "—",
+    totalMinutes: 0,
+    transferCount: 0,
+    metaParts: [],
+    events: [],
+    rationale: [],
+    primaryActionLabel,
+    secondaryActionLabel,
+    invalid: true,
+    invalidReason: "This itinerary is unavailable.",
+    sourceCardIds: card?.card_id ? [card.card_id] : [],
+    primaryCardId: card?.card_id ?? "invalid",
+  };
+}
+
+function cardPlaceNames(card: RouteCard): string[] {
+  const originLabel = card.origin?.label?.trim() || "Your location";
+  const destinationLabel = card.destination.label.trim();
+  const waypointNames = Array.isArray(card.itinerary?.waypoints)
+    ? card.itinerary.waypoints
+        .map((waypoint) => canonicalPlaceLabel(waypoint, ""))
+        .filter(Boolean)
+    : [];
+  return [originLabel, ...waypointNames, destinationLabel].filter(
+    (name, index, values) => index === 0 || values[index - 1] !== name,
+  );
+}
+
+function cardRationale(card: RouteCard): string[] {
+  const structuredReasons = card.itinerary?.structured_recommendation_reasons;
+  if (Array.isArray(structuredReasons) && structuredReasons.length > 0) {
+    return structuredReasons
+      .map(formatStructuredRecommendationReason)
+      .filter((reason): reason is string => Boolean(reason));
+  }
+  return parseRationale(card.summary.reason);
+}
+
 export function buildItineraryViewModel(
   card: RouteCard,
   options?: {
@@ -164,58 +217,17 @@ export function buildItineraryViewModel(
 ): ItineraryViewModel {
   const primaryActionLabel = options?.primaryActionLabel ?? "Open on map";
   const secondaryActionLabel = options?.secondaryActionLabel ?? "View steps";
-
   if (!isValidCard(card)) {
-    return {
-      id: card?.card_id ?? "invalid",
-      recommended: card?.role === "recommended",
-      placeNames: [],
-      arrivalLabel: null,
-      firstLegArrivalLabel: null,
-      durationLabel: "—",
-      totalMinutes: 0,
-      transferCount: 0,
-      metaParts: [],
-      events: [],
-      rationale: [],
-      primaryActionLabel,
-      secondaryActionLabel,
-      invalid: true,
-      invalidReason: "This itinerary is unavailable.",
-      sourceCardIds: card?.card_id ? [card.card_id] : [],
-      primaryCardId: card?.card_id ?? "invalid",
-    };
+    return unavailableItineraryViewModel(card, primaryActionLabel, secondaryActionLabel);
   }
 
   const originLabel = card.origin?.label?.trim() || "Your location";
   const destinationLabel = card.destination.label.trim();
-  const waypointNames = Array.isArray(card.itinerary?.waypoints)
-    ? card.itinerary.waypoints
-        .map((waypoint) => canonicalPlaceLabel(waypoint, ""))
-        .filter(Boolean)
-    : [];
-  const placeNames = [originLabel, ...waypointNames, destinationLabel].filter(
-    (name, index, values) => index === 0 || values[index - 1] !== name,
-  );
   const transferCount = cardTransferCount(card);
-  const events = buildEventsFromCanonicalItinerary(
-    card.itinerary!,
-    originLabel,
-    destinationLabel,
-    card.card_id,
-  );
-  const structuredReasons = card.itinerary?.structured_recommendation_reasons;
-  const rationale =
-    Array.isArray(structuredReasons) && structuredReasons.length > 0
-      ? structuredReasons
-          .map(formatStructuredRecommendationReason)
-          .filter((reason): reason is string => Boolean(reason))
-      : parseRationale(card.summary.reason);
-
   return {
     id: card.card_id,
     recommended: card.role === "recommended",
-    placeNames,
+    placeNames: cardPlaceNames(card),
     arrivalLabel: cardArrivalLabel(card),
     firstLegArrivalLabel: firstLegArrivalLabel(card),
     durationLabel: formatDurationMinutes(cardTotalMinutes(card)),
@@ -225,8 +237,13 @@ export function buildItineraryViewModel(
       transferCount,
       durationMinutesFromSeconds(card.itinerary?.total_dwell_seconds) ?? 0,
     ),
-    events,
-    rationale,
+    events: buildEventsFromCanonicalItinerary(
+      card.itinerary,
+      originLabel,
+      destinationLabel,
+      card.card_id,
+    ),
+    rationale: cardRationale(card),
     primaryActionLabel,
     secondaryActionLabel,
     invalid: false,

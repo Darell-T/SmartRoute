@@ -16,18 +16,21 @@ from __future__ import annotations
 
 import importlib
 import os
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-from app.services.trips.location import resolve_named_place as resolve_neutral_named_place
+from app.services import evidence
+from app.services.trips import candidates, scoring
+from app.services.trips.crowds import evidence as crowd_evidence
+from app.services.trips.crowds import hotspots as crowd_hotspots
+from app.services.trips.location import (
+    resolve_named_place as resolve_neutral_named_place,
+)
 from app.services.trips.preparation.input import (
     derive_arrive_by_departure,
     route_with_recovery,
 )
 from app.services.trips.preparation.prepare import PreparationDependencies
-from app.services import evidence
-from app.services.trips import candidates, scoring
-from app.services.trips.crowds import evidence as crowd_evidence
-from app.services.trips.crowds import hotspots as crowd_hotspots
 from app.services.trips.route_incidents import scan as trip_incidents
 
 TRIP_CONTEXT_TIMEOUT_S = float(os.getenv("TRIP_CONTEXT_TIMEOUT_S", "2.0"))
@@ -40,10 +43,10 @@ mta_realtime = importlib.import_module("app.services.mta.realtime")
 
 def _route_service_ids(route: list[dict]) -> set[str]:
     return {
-        scoring._step_route_id(step).strip().upper()
+        scoring.step_route_id(step).strip().upper()
         for step in route or []
         if step.get("type") in {"SUBWAY", "BUS"}
-        and scoring._step_route_id(step).strip()
+        and scoring.step_route_id(step).strip()
     }
 
 
@@ -57,8 +60,6 @@ def build_preparation_dependencies(
     normalize_routes: Callable[..., Any] | None = None,
     directions_module: Any | None = None,
     mta_module: Any | None = None,
-    route_with_recovery_fn: Callable[..., Awaitable[list]] | None = None,
-    derive_arrive_by_departure_fn: Callable[..., Awaitable[str]] | None = None,
 ) -> PreparationDependencies:
     """Return provider bindings for one model-free route-preparation request."""
     bound_directions = directions_module or directions_service
@@ -78,10 +79,8 @@ def build_preparation_dependencies(
 
     return PreparationDependencies(
         directions_service=bound_directions,
-        route_with_recovery=route_with_recovery_fn or route_with_bound_provider,
-        derive_arrive_by_departure=(
-            derive_arrive_by_departure_fn or derive_with_bound_provider
-        ),
+        route_with_recovery=route_with_bound_provider,
+        derive_arrive_by_departure=derive_with_bound_provider,
         resolve_named_place=resolve_named_place or resolve_neutral_named_place,
         collect_alerts=bound_mta.fetch_service_alerts,
         collect_stalled_trains=bound_mta.get_stalled_trains,
@@ -119,20 +118,7 @@ def build_preparation_dependencies(
 def new_preparation_timings() -> dict[str, float]:
     """Create the timing accumulator shared by route preparation paths."""
 
-    return {
-        key: 0.0
-        for key in (
-            "place_resolution_ms",
-            "route_provider_ms",
-            "mta_ms",
-            "ticketmaster_ms",
-            "incident_ms",
-            "advisor_ms",
-            "scoring_ms",
-            "enrichment_ms",
-            "plan_trip_ms",
-        )
-    }
+    return dict.fromkeys(("place_resolution_ms", "route_provider_ms", "mta_ms", "ticketmaster_ms", "incident_ms", "advisor_ms", "scoring_ms", "enrichment_ms", "plan_trip_ms"), 0.0)
 
 
 __all__ = (

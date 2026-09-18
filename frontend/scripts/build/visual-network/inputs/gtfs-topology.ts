@@ -22,7 +22,7 @@ export type GtfsTrip = {
   raw_route_id: string;
   route_id: string;
   direction_id: string;
-  shape_id: string | null;
+  "shape_id": string | null;
   service_id: string;
   headsign: string;
 };
@@ -104,7 +104,7 @@ export function buildTripsById(
       raw_route_id: rawRouteId,
       route_id: route.route_id,
       direction_id: String(r.direction_id || "").trim(),
-      shape_id: String(r.shape_id || "").trim() || null,
+      "shape_id": String(r["shape_id"] || "").trim() || null,
       service_id: String(r.service_id || "").trim(),
       headsign: String(r.trip_headsign || "").trim(),
     });

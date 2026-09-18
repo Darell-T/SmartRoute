@@ -10,21 +10,30 @@ const frontendRoot = process.cwd();
 const publicDir = path.join(frontendRoot, "public");
 const manifestPath = path.join(frontendRoot, "lib", "artifact-manifest.json");
 
-function hashArtifact(name: string): string {
+function hashGitIndexLf(source: string): string {
   return createHash("sha256")
-    .update(readFileSync(path.join(publicDir, name)))
+    .update(source.replaceAll("\r\n", "\n"))
     .digest("hex")
     .slice(0, 12);
 }
 
+function hashArtifact(name: string): string {
+  return hashGitIndexLf(readFileSync(path.join(publicDir, name), "utf8"));
+}
+
 test("artifact manifest hashes match runtime GeoJSON artifacts", () => {
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as ArtifactManifest;
+  const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (parsed === null || Array.isArray(parsed) || parsed !== Object(parsed)) {
+    throw new Error("artifact-manifest.json must be a JSON object");
+  }
+  // SAFETY: the manifest is a JSON object of artifact name to hash after the predicates above.
+  const manifest = parsed as ArtifactManifest;
 
   for (const name of Object.keys(manifest)) {
     assert.equal(
       manifest[name],
       hashArtifact(name),
-      `${name} hash is stale; run node --experimental-strip-types frontend/scripts/build-artifact-manifest.ts`,
+      `${name} hash is stale; run npm run build:artifact-manifest`,
     );
   }
 });

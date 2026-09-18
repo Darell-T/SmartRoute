@@ -6,7 +6,7 @@ so every Batch E2 source file stays well below the 500-line limit.
 
 Only genuine external/provider/data seams are scripted, identical to the
 documented Batch A/B/C/D harness seams (``prepare_single_leg`` provider
-route/evidence seam, ``_enrich_route`` live enrichment, ``lookup_arrivals``
+route/evidence seam, ``enrich_route`` live enrichment, ``lookup_arrivals``
 live MTA arrival fetch, ``new_candidate_id`` opaque id generation). The real
 candidate store, real ``prepare_route_options`` / ``present_route`` executors,
 real trip/session/scenario state, real registry, real tool ledger, and real

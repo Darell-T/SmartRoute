@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
-from typing import Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
 
-from app.services.agent.tools.transit.direction import normalize_direction, resolve_direction
-from app.services.agent.tools.location_resolution import parse_coordinates
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
+from app.services.agent.tools.location_resolution import (
+    _origin_latlng,
+    parse_coordinates,
+)
+from app.services.agent.tools.transit.direction import (
+    normalize_direction,
+    resolve_direction,
+)
 from app.services.evidence import evidence_envelope
 
 ARRIVAL_LIMIT_DEFAULT = 3
@@ -29,7 +35,7 @@ _STATION_ALIASES = {
 
 def _normalized_name(value: object) -> str:
     normalized = " ".join(
-        str(value or "").casefold().replace("–", "-").replace("—", "-").split()
+        str(value or "").casefold().replace("\u2013", "-").replace("\u2014", "-").split()
     )
     normalized = re.sub(r"\b(?:station|stop)\b", "", normalized)
     return " ".join(normalized.split())
@@ -64,12 +70,10 @@ def _location(
         coords = parse_coordinates(boarding.get("coordinates"))
         if coords is not None:
             return coords
-    return parse_coordinates(ctx.origin or {})
+    return _origin_latlng(ctx)
 
 
 def _normalize_direction(value: object) -> str | None:
-    """Canonicalize exact semantic values, retaining unknown labels."""
-
     normalized = _normalized_name(value)
     if not normalized:
         return None
@@ -151,7 +155,7 @@ def _empty_payload(
     stop_name: str = "Transit stop",
     ambiguity: list[dict] | None = None,
 ) -> dict:
-    observed = datetime.fromtimestamp(now, timezone.utc)
+    observed = datetime.fromtimestamp(now, UTC)
     return {
         "route_id": route_id,
         "stop": {"id": "", "name": stop_name},
@@ -168,6 +172,53 @@ def _empty_payload(
     }
 
 
+_DIRECTION_GROUP_LABELS = {
+    "uptown": "Uptown / Manhattan-bound",
+    "downtown": "Downtown / Brooklyn-bound",
+}
+
+
+def _direction_groups(
+    grouped: dict[str, list[dict]], now: int, status: str
+) -> list[dict]:
+    directions = []
+    for direction, values in sorted(grouped.items()):
+        arrivals = _group_arrival_predictions(values, now, status)
+        if not arrivals:
+            continue
+        directions.append(
+            {
+                "id": direction,
+                "label": _DIRECTION_GROUP_LABELS.get(
+                    direction,
+                    str(values[0].get("direction_label") or direction).title(),
+                ),
+                "arrivals": arrivals,
+            }
+        )
+    return directions
+
+
+def _group_arrival_predictions(
+    values: list[dict], now: int, status: str
+) -> list[dict]:
+    arrivals = []
+    for value in values:
+        timestamp = int(value["arrival_time"])
+        minutes = (timestamp - now + 59) // 60
+        if minutes <= 0:
+            continue
+        arrivals.append(
+            {
+                "expected_at": datetime.fromtimestamp(timestamp, UTC).isoformat(),
+                "minutes": minutes,
+                "realtime": status in {"live", "stale"},
+                "trip_id": value.get("trip_id"),
+                "vehicle_id": value.get("vehicle_id"),
+            }
+        )
+    return arrivals
+
 def _arrival_payload(
     *,
     route_id: str,
@@ -179,37 +230,9 @@ def _arrival_payload(
     walking_minutes: int | None = None,
     valid_until: object = None,
 ) -> dict:
-    directions = []
-    for direction, values in sorted(grouped.items()):
-        arrivals = []
-        for value in values:
-            timestamp = int(value["arrival_time"])
-            minutes = (timestamp - now + 59) // 60
-            if minutes <= 0:
-                continue
-            arrivals.append(
-                {
-                    "expected_at": datetime.fromtimestamp(
-                        timestamp, timezone.utc
-                    ).isoformat(),
-                    "minutes": minutes,
-                    "realtime": status in {"live", "stale"},
-                    "trip_id": value.get("trip_id"),
-                    "vehicle_id": value.get("vehicle_id"),
-                }
-            )
-        if not arrivals:
-            continue
-        label = str(values[0].get("direction_label") or direction).title()
-        if direction == "uptown":
-            label = "Uptown / Manhattan-bound"
-        elif direction == "downtown":
-            label = "Downtown / Brooklyn-bound"
-        directions.append({"id": direction, "label": label, "arrivals": arrivals})
+    directions = _direction_groups(grouped, now, status)
     all_minutes = [
-        arrival["minutes"]
-        for group in directions
-        for arrival in group["arrivals"]
+        arrival["minutes"] for group in directions for arrival in group["arrivals"]
     ]
     payload = {
         "route_id": route_id,
@@ -221,7 +244,7 @@ def _arrival_payload(
             "longitude": stop.get("stop_lon"),
         },
         "directions": directions,
-        "updated_at": datetime.fromtimestamp(updated_at, timezone.utc).isoformat(),
+        "updated_at": datetime.fromtimestamp(updated_at, UTC).isoformat(),
         "source_status": status,
     }
     if walking_minutes is not None:
@@ -233,9 +256,9 @@ def _arrival_payload(
     payload["evidence"] = evidence_envelope(
         "mta_gtfs_rt" if status != "scheduled" else "mta_static_gtfs",
         {"directions": directions},
-        observed_at=datetime.fromtimestamp(updated_at, timezone.utc),
+        observed_at=datetime.fromtimestamp(updated_at, UTC),
         ttl_seconds=FEED_STALE_AFTER_S if status != "scheduled" else None,
         valid_until=valid_until,
         available=available,
-    ).to_dict(datetime.fromtimestamp(now, timezone.utc))
+    ).to_dict(datetime.fromtimestamp(now, UTC))
     return payload

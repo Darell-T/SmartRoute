@@ -23,7 +23,11 @@ resolver still own every other step.
 from __future__ import annotations
 
 from app.services.agent.public_surface import INITIAL_TOOL_NAMES
-from tests.conversation.conversation_discovery_fixtures import CONFLICTING_LABEL, PLACES_FIXTURE
+
+from tests.conversation.conversation_discovery_fixtures import (
+    CONFLICTING_LABEL,
+    PLACES_FIXTURE,
+)
 from tests.conversation.conversation_matrix_harness import make_leg
 
 # ---- Deterministic multi-intent messages -----------------------------------
@@ -66,20 +70,8 @@ F2_FORBIDDEN_TOOLS = (
     "venue_crowd_window",
     "event_lookup",
 )
-ROUTE_FORBIDDEN_TOOLS = F2_FORBIDDEN_TOOLS + (
-    "search_local_places",
-    "transit_snapshot",
-    "lookup_arrivals",
-    "lookup_facts",
-    "web_search",
-)
-STATUS_FORBIDDEN_TOOLS = F2_FORBIDDEN_TOOLS + (
-    "search_local_places",
-    "get_place_details",
-    "prepare_route_options",
-    "present_route",
-    "web_search",
-)
+ROUTE_FORBIDDEN_TOOLS = (*F2_FORBIDDEN_TOOLS, "search_local_places", "transit_snapshot", "lookup_arrivals", "lookup_facts", "web_search")
+STATUS_FORBIDDEN_TOOLS = (*F2_FORBIDDEN_TOOLS, "search_local_places", "get_place_details", "prepare_route_options", "present_route", "web_search")
 
 # ---- Scripted tool payloads -------------------------------------------------
 PREPARE_TIMES_SQUARE_INPUT = {"destination": "Times Square"}
@@ -193,24 +185,30 @@ def _goal_for_call(name: str, tool_input: dict) -> tuple[str, str] | None:
     return None
 
 
-def _model_led_rounds(
-    rounds: list[dict], *, turn_id: str, evidence_id: str | None = None
-) -> tuple[list[dict], str | None, dict[str, dict]]:
-    """Convert legacy scripted calls into the model-led outcome protocol.
+_PREPARE_NULL_KEYS = (
+    "origin",
+    "destination",
+    "destination_place_id",
+    "exclude_modes",
+    "allowed_modes",
+    "excluded_route_ids",
+    "required_route_ids",
+    "allowed_route_ids",
+    "preferred_modes",
+    "routing_preference",
+    "departure_time",
+    "arrival_by",
+    "waypoints",
+    "waypoint_dwell_minutes",
+    "avoid_crowds",
+    "avoid_stairs",
+    "accessibility_required",
+    "walking_tolerance_minutes",
+    "what_if",
+)
 
-    The adapter intentionally declares dependencies from the compound shape:
-    route depends on a selected destination, and a route+status request waits
-    for the status goal. Provider-grounded answers are converted to their
-    canonical presenters; ``complete_turn`` remains only for general or
-    attempted-but-unavailable/clarification recovery.
-    """
 
-    calls = [
-        call
-        for scripted in rounds
-        for call in scripted.get("tool_use") or []
-        if str(call.get("name") or "") != "declare_goals"
-    ]
+def _compound_goals(calls: list[dict]) -> tuple[list[dict], bool, bool, bool]:
     names = {str(call.get("name") or "") for call in calls}
     has_places = bool(names & {"discover_places", "present_places"})
     has_route = bool(names & {"prepare_route_options", "present_route"})
@@ -221,7 +219,6 @@ def _model_led_rounds(
             for call in calls
             if str(call.get("name") or "") == "complete_turn"
         )
-
     goals: list[dict] = []
     if has_places:
         goals.append(
@@ -236,9 +233,7 @@ def _model_led_rounds(
             {"goal_key": "status", "kind": "service_status", "depends_on": []}
         )
     if has_route:
-        dependencies = []
-        if has_places:
-            dependencies.append("destination")
+        dependencies = ["destination"] if has_places else []
         goals.append(
             {"goal_key": "route", "kind": "route", "depends_on": dependencies}
         )
@@ -246,14 +241,76 @@ def _model_led_rounds(
         goals.append(
             {"goal_key": "response", "kind": "general_response", "depends_on": []}
         )
+    return goals, has_places, has_route, has_status
+
+
+def _fill_public_schema(name: str, tool_input: dict) -> dict:
+    if name == "discover_places":
+        tool_input.setdefault("activity_label", None)
+    elif name == "check_transit":
+        tool_input.setdefault("stop_source", "auto")
+        tool_input.setdefault("concerns", [])
+        tool_input.setdefault("activity_label", None)
+    elif name == "prepare_route_options":
+        for key in _PREPARE_NULL_KEYS:
+            tool_input.setdefault(key, None)
+        tool_input.setdefault("activity_label", None)
+    elif name in {"present_places", "present_transit", "present_route"}:
+        tool_input.setdefault("lead_in", "")
+        tool_input.setdefault("follow_up", "")
+    return tool_input
+
+
+def _rewrite_multi_call(
+    call: dict,
+    *,
+    evidence_id: str,
+    goal_by_capability: dict[str, str],
+    has_places: bool,
+    has_route: bool,
+    has_status: bool,
+) -> dict:
+    name = str(call.get("name") or "")
+    tool_input = dict(call.get("input") or {})
+    goal_key = goal_by_capability.get(name)
+    if name == "complete_turn":
+        provider_key = (
+            "route" if has_route else "status" if has_status else
+            "destination" if has_places else "response"
+        )
+        outcome = str(tool_input.get("outcome") or "answer")
+        if has_status and not has_route and outcome == "answer":
+            name = "present_transit"
+            tool_input = {
+                "goal_key": "status",
+                "evidence_set_id": evidence_id,
+            }
+        else:
+            tool_input.pop("goal_key", None)
+            tool_input["goal_keys"] = [provider_key]
+            if outcome == "answer" and provider_key != "response":
+                tool_input["outcome"] = "unavailable"
+        goal_key = None
+    if name == "present_transit":
+        tool_input["goal_key"] = "status"
+        tool_input.setdefault("evidence_set_id", evidence_id)
+    elif goal_key is not None:
+        tool_input["goal_key"] = goal_key
+    return {**call, "name": name, "input": _fill_public_schema(name, tool_input)}
+
+
+def _model_led_rounds(
+    rounds: list[dict], *, turn_id: str, evidence_id: str
+) -> tuple[list[dict], str | None, dict[str, dict]]:
+    calls = [
+        call
+        for scripted in rounds
+        for call in scripted.get("tool_use") or []
+        if str(call.get("name") or "") != "declare_goals"
+    ]
+    goals, has_places, has_route, has_status = _compound_goals(calls)
     if not goals:
         return rounds, None, {}
-
-    # Evidence handles are session-owned. A fixed ``te_f2_t1`` handle caused
-    # the second mode in a same-test transcript to collide with the first
-    # mode's immutable evidence record, so the presenter received a stale
-    # handle after the store regenerated the colliding id.
-    evidence_id = evidence_id or f"te_f2_{turn_id}"
     goal_by_capability = {
         "discover_places": "destination" if has_route else "places",
         "present_places": "destination" if has_route else "places",
@@ -265,76 +322,20 @@ def _model_led_rounds(
     adapted: list[dict] = []
     declared = False
     for scripted in rounds:
-        transformed: list[dict] = []
+        transformed = []
         for call in scripted.get("tool_use") or []:
-            name = str(call.get("name") or "")
-            if name == "declare_goals":
+            if str(call.get("name") or "") == "declare_goals":
                 continue
-            tool_input = dict(call.get("input") or {})
-            goal_key = goal_by_capability.get(name)
-            if name == "complete_turn":
-                provider_key = (
-                    "route" if has_route else "status" if has_status else
-                    "destination" if has_places else "response"
+            transformed.append(
+                _rewrite_multi_call(
+                    call,
+                    evidence_id=evidence_id,
+                    goal_by_capability=goal_by_capability,
+                    has_places=has_places,
+                    has_route=has_route,
+                    has_status=has_status,
                 )
-                outcome = str(tool_input.get("outcome") or "answer")
-                if has_status and not has_route and outcome == "answer":
-                    name = "present_transit"
-                    tool_input = {
-                        "goal_key": "status",
-                        "evidence_set_id": evidence_id,
-                    }
-                else:
-                    tool_input.pop("goal_key", None)
-                    tool_input["goal_keys"] = [provider_key]
-                    # Provider-grounded answers need a canonical presenter. A
-                    # terminal remains valid only for recovery after failure.
-                    if outcome == "answer" and provider_key != "response":
-                        tool_input["outcome"] = "unavailable"
-                goal_key = None
-            if name == "present_transit":
-                tool_input["goal_key"] = "status"
-                tool_input.setdefault("evidence_set_id", evidence_id)
-            elif goal_key is not None:
-                tool_input["goal_key"] = goal_key
-            # Keep scripted model calls faithful to the strict public schemas.
-            # Nullable route-planning fields remain null so the server, rather
-            # than a fixture default, owns context merging and constraint
-            # semantics.
-            if name == "discover_places":
-                tool_input.setdefault("activity_label", None)
-            elif name == "check_transit":
-                tool_input.setdefault("stop_source", "auto")
-                tool_input.setdefault("concerns", [])
-                tool_input.setdefault("activity_label", None)
-            elif name == "prepare_route_options":
-                for key in (
-                    "origin",
-                    "destination",
-                    "destination_place_id",
-                    "exclude_modes",
-                    "allowed_modes",
-                    "excluded_route_ids",
-                    "required_route_ids",
-                    "allowed_route_ids",
-                    "preferred_modes",
-                    "routing_preference",
-                    "departure_time",
-                    "arrival_by",
-                    "waypoints",
-                    "waypoint_dwell_minutes",
-                    "avoid_crowds",
-                    "avoid_stairs",
-                    "accessibility_required",
-                    "walking_tolerance_minutes",
-                    "what_if",
-                ):
-                    tool_input.setdefault(key, None)
-                tool_input.setdefault("activity_label", None)
-            elif name in {"present_places", "present_transit", "present_route"}:
-                tool_input.setdefault("lead_in", "")
-                tool_input.setdefault("follow_up", "")
-            transformed.append({**call, "name": name, "input": tool_input})
+            )
         if not transformed:
             continue
         if not declared:
@@ -360,11 +361,11 @@ __all__ = (
     "CONFLICTING_LABEL",
     "DISCOVERY_ONLY_MESSAGE",
     "DISCOVERY_PLACE_IDS",
-    "DISCOVERY_SET_ID",
     "DISCOVERY_PLUS_ROUTE_MESSAGE",
-    "DISCOVERY_ROUTE_TOOL_PROFILE",
     "DISCOVERY_PLUS_STATUS_MESSAGE",
     "DISCOVERY_PLUS_STATUS_TOOL_PROFILE",
+    "DISCOVERY_ROUTE_TOOL_PROFILE",
+    "DISCOVERY_SET_ID",
     "DISCOVERY_TOOL_PROFILE",
     "EXPLAIN_ONLY_MESSAGE",
     "F2_FORBIDDEN_TOOLS",
@@ -379,8 +380,8 @@ __all__ = (
     "POI_SEAM",
     "PREPARE_SEAM",
     "PREPARE_TIMES_SQUARE_INPUT",
-    "PREPARE_WORK_INPUT",
     "PREPARE_WORK_AVOID_Q_INPUT",
+    "PREPARE_WORK_INPUT",
     "ROUTE_FORBIDDEN_TOOLS",
     "ROUTE_PLUS_EXPLAIN_MESSAGE",
     "ROUTE_PLUS_STATUS_MESSAGE",
@@ -393,11 +394,11 @@ __all__ = (
     "TRANSIT_QUESTION_TOOL_PROFILE",
     "TRANSIT_SNAPSHOT_Q_INPUT",
     "TWO_CANDIDATE_IDS",
+    "_model_led_rounds",
     "q_alerts_fixture",
     "q_only_work_leg",
     "r_only_work_leg",
     "stored_place2",
     "times_square_leg",
     "work_two_routes_leg",
-    "_model_led_rounds",
 )

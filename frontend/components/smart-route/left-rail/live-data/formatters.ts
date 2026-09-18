@@ -6,40 +6,42 @@ export function secondsSince(epochSeconds: number | null | undefined, nowMs: num
 }
 
 export function formatDistance(meters: number | null | undefined): string {
-  if (typeof meters !== "number" || !Number.isFinite(meters)) return "nearby";
+  if (meters == null || !Number.isFinite(meters)) return "nearby";
   if (meters < 160) return `${Math.round(meters)} m`;
   return `${Math.max(0.1, meters / 1609.344).toFixed(1)} mi`;
 }
 
 export function formatWalk(meters: number | null | undefined): string {
-  if (typeof meters !== "number" || !Number.isFinite(meters)) return "nearby";
+  if (meters == null || !Number.isFinite(meters)) return "nearby";
   return `${Math.max(1, Math.round(meters / 84))} min walk`;
 }
 
-const TRANSIT_ABBREVIATIONS: Record<string, string> = {
-  AV: "Av",
-  AVE: "Av",
-  ST: "St",
-  STS: "Sts",
-  SQ: "Sq",
-  BLVD: "Blvd",
-  BL: "Bl",
-  PKWY: "Pkwy",
-  PKY: "Pkwy",
-  STA: "Sta",
-  RD: "Rd",
-  DR: "Dr",
-  PL: "Pl",
-  PK: "Pk",
-  HTS: "Hts",
-  CTR: "Ctr",
-  JCT: "Jct",
-  TER: "Ter",
-  EXPY: "Expy",
-  HWY: "Hwy",
-  BCH: "Bch",
-  TPKE: "Tpke",
-};
+const TRANSIT_ABBREVIATIONS = new Map<string, string>(
+  Object.entries({
+    AV: "Av",
+    AVE: "Av",
+    ST: "St",
+    STS: "Sts",
+    SQ: "Sq",
+    BLVD: "Blvd",
+    BL: "Bl",
+    PKWY: "Pkwy",
+    PKY: "Pkwy",
+    STA: "Sta",
+    RD: "Rd",
+    DR: "Dr",
+    PL: "Pl",
+    PK: "Pk",
+    HTS: "Hts",
+    CTR: "Ctr",
+    JCT: "Jct",
+    TER: "Ter",
+    EXPY: "Expy",
+    HWY: "Hwy",
+    BCH: "Bch",
+    TPKE: "Tpke",
+  }),
+);
 
 /* Real acronyms stay all-caps; everything else all-caps is shouting. */
 const KEEP_ALL_CAPS = new Set([
@@ -65,8 +67,9 @@ function titleCaseTransitToken(token: string): string {
   if (upper === "VIA") return "via";
   if (KEEP_ALL_CAPS.has(upper)) return upper;
   const bare = upper.replace(/[^A-Z0-9]/g, "");
-  if (TRANSIT_ABBREVIATIONS[bare]) {
-    return upper.replace(bare, TRANSIT_ABBREVIATIONS[bare]);
+  const abbreviation = TRANSIT_ABBREVIATIONS.get(bare);
+  if (abbreviation) {
+    return upper.replace(bare, abbreviation);
   }
   if (upper.length === 1) return upper; // compass letters: E 18 St, W 4 St
   const ordinal = upper.match(/^(\d+)(ST|ND|RD|TH)$/);
@@ -93,10 +96,7 @@ export function cleanDestinationLabel(value: unknown): string {
 /* Bus headsigns pack qualifiers into the destination ("LIMITED SUNSET PARK
    3 AV via CHURCH"). The row title should be the destination alone; the
    qualifiers belong on the metadata line. */
-export function splitBusHeadsign(label: string): {
-  destination: string;
-  qualifiers: string[];
-} {
+export function splitBusHeadsign(label: string) {
   let rest = label.trim();
   const qualifiers: string[] = [];
   const limited = rest.match(/^(?:limited|ltd\.?)\s+/i);
@@ -105,7 +105,7 @@ export function splitBusHeadsign(label: string): {
     rest = rest.slice(limited[0].length);
   }
   const via = rest.match(/\s+via\s+(.+)$/i);
-  if (via && typeof via.index === "number") {
+  if (via && via.index !== undefined) {
     qualifiers.push(`via ${via[1].trim()}`);
     rest = rest.slice(0, via.index).trim();
   }

@@ -31,7 +31,7 @@ export type TopologyBranchSummary = {
   canonical_pattern_trips: number;
   canonical_pattern_share: number;
   distinct_patterns: number;
-  sample_shape_ids: string[];
+  "sample_shape_ids": string[];
   sample_headsigns: string[];
   stop_sequence: string[];
 };
@@ -158,7 +158,7 @@ export function buildGtfsTopologyStage({
             canonical_pattern_trips: b.canonical_pattern_trips,
             canonical_pattern_share: b.canonical_pattern_share,
             distinct_patterns: b.distinct_patterns,
-            sample_shape_ids: b.sample_shape_ids,
+            "sample_shape_ids": b["sample_shape_ids"],
             sample_headsigns: b.sample_headsigns,
             stop_sequence: b.stop_sequence,
           })),

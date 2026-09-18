@@ -10,17 +10,15 @@ const P = (dxM: number, dyM: number): Position => [O[0] + dxM * DEG_PER_M_LON, O
 const EARTH_RADIUS_M = 6371000;
 
 type TestFeatureProperties = {
-  route_ids: string[];
-  color_route_ids: string[];
-  color: string;
+  route_ids?: string[];
+  color_route_ids?: string[];
+  color?: string;
   length_m: number;
   corridor_id?: string;
   cartographic_junction_override?: string;
-  [key: string]: unknown;
 };
 
 type TestFeature = Feature<LineStringGeometry, TestFeatureProperties>;
-type LineFeature = Feature<LineStringGeometry, { [key: string]: unknown }>;
 
 function hav([lon1, lat1]: Position, [lon2, lat2]: Position): number {
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -42,7 +40,6 @@ function feature(
     geometry: { type: "LineString", coordinates: coords },
     properties: {
       route_ids: routeIds,
-      color_route_ids: routeIds,
       color: "#00933C",
       length_m: 1,
       ...extra,
@@ -59,20 +56,6 @@ function turnAt(coords: Position[], i: number): number {
   while (turn > 180) turn -= 360;
   while (turn < -180) turn += 360;
   return Math.abs(turn);
-}
-
-function pointLineDistanceM(point: Position, start: Position, end: Position): number {
-  const ax = (start[0] - O[0]) / DEG_PER_M_LON;
-  const ay = (start[1] - O[1]) / DEG_PER_M_LAT;
-  const bx = (end[0] - O[0]) / DEG_PER_M_LON;
-  const by = (end[1] - O[1]) / DEG_PER_M_LAT;
-  const px = (point[0] - O[0]) / DEG_PER_M_LON;
-  const py = (point[1] - O[1]) / DEG_PER_M_LAT;
-  const dx = bx - ax;
-  const dy = by - ay;
-  const len2 = dx * dx + dy * dy || 1e-9;
-  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
-  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
 }
 
 test("Mott Haven route-5 override creates an Apple-style lower schematic join into the 4/5 trunk", () => {
@@ -172,4 +155,158 @@ test("Mott Haven override is inert when the route-5 branch is not near the 4/5 t
   assert.equal(result.appliedCount, 0);
   assert.equal(result.features[0], branch);
   assert.equal(result.features[1], trunk);
+});
+
+test("empty and malformed features are a no-op and the Mott Haven join is deterministic", () => {
+  const emptyFirst = applyCartographicJunctionOverrides([]);
+  const emptySecond = applyCartographicJunctionOverrides([]);
+  assert.deepEqual(emptyFirst, { features: [], appliedCount: 0, debugFeatures: [] });
+  assert.deepEqual(emptyFirst, emptySecond);
+
+  const stub = feature(["5"], [P(0, 0)], { corridor_id: "stub-5" });
+  const stubResult = applyCartographicJunctionOverrides([stub]);
+  assert.equal(stubResult.appliedCount, 0);
+  assert.equal(stubResult.features[0], stub);
+
+  const schematicPoints = [
+    P(-160, 205),
+    P(-190, 110),
+    P(-145, 25),
+    P(-45, -20),
+  ];
+  const gates = {
+    branchCutBackM: 430,
+    trunkMergeDownstreamM: 230,
+    sampleM: 8,
+    maxEndpointGapM: 80,
+    schematicPoints,
+  };
+  const branchCoords: Position[] = [
+    P(520, 270),
+    P(360, 275),
+    P(200, 275),
+    P(120, 270),
+    P(40, 330),
+    P(25, 290),
+    P(35, 250),
+  ];
+  const trunkCoords: Position[] = [P(35, 255), P(20, 160), P(5, 40), P(0, -180)];
+  const first = applyCartographicJunctionOverrides(
+    [feature(["5"], branchCoords, { corridor_id: "branch-5" }), feature(["4", "5"], trunkCoords, { corridor_id: "trunk-45" })],
+    gates,
+  );
+  const second = applyCartographicJunctionOverrides(
+    [feature(["5"], branchCoords, { corridor_id: "branch-5" }), feature(["4", "5"], trunkCoords, { corridor_id: "trunk-45" })],
+    gates,
+  );
+  assert.equal(first.appliedCount, 1);
+  assert.equal(second.appliedCount, 1);
+  assert.deepEqual(first.features[0]?.geometry.coordinates, second.features[0]?.geometry.coordinates);
+  assert.equal(first.features[0]?.properties.corridor_id, "branch-5");
+  assert.equal(first.features[1]?.properties.corridor_id, "trunk-45");
+});
+
+const MOTT_BRANCH: Position[] = [
+  P(520, 270),
+  P(360, 275),
+  P(200, 275),
+  P(120, 270),
+  P(40, 330),
+  P(25, 290),
+  P(35, 250),
+];
+const MOTT_TRUNK: Position[] = [P(35, 255), P(20, 160), P(5, 40), P(0, -180)];
+const MOTT_SCHEMATIC = [P(-160, 205), P(-190, 110), P(-145, 25), P(-45, -20)];
+const MOTT_GATES = {
+  branchCutBackM: 430,
+  trunkMergeDownstreamM: 230,
+  sampleM: 8,
+  maxEndpointGapM: 80,
+  schematicPoints: MOTT_SCHEMATIC,
+};
+
+test("Mott Haven join keeps an already-oriented 5 branch pointing at the 4/5 trunk", () => {
+  const result = applyCartographicJunctionOverrides(
+    [
+      feature(["5"], [...MOTT_BRANCH].reverse(), { corridor_id: "branch-5" }),
+      feature(["4", "5"], [...MOTT_TRUNK].reverse(), { corridor_id: "trunk-45" }),
+    ],
+    MOTT_GATES,
+  );
+  assert.equal(result.appliedCount, 1);
+  assert.equal(result.features[0]?.properties.cartographic_junction_override, "mott_haven_5");
+});
+
+test("Mott Haven cut-back falls back to arc distance when no vertex sits in the bbox", () => {
+  const result = applyCartographicJunctionOverrides(
+    [
+      feature(["5"], MOTT_BRANCH, { corridor_id: "branch-5" }),
+      feature(["4", "5"], MOTT_TRUNK, { corridor_id: "trunk-45" }),
+    ],
+    {
+      ...MOTT_GATES,
+      bbox: { minLon: -74.2, maxLon: -74.1, minLat: 40.6, maxLat: 40.7 },
+    },
+  );
+  assert.equal(result.appliedCount, 1);
+  assert.ok((result.features[0]?.geometry.coordinates.length ?? 0) > MOTT_BRANCH.length);
+});
+
+test("Mott Haven override is inert when the found 5 and 4/5 endpoints are too far apart", () => {
+  const branch = feature(["5"], [P(-200, 0), P(-40, 0)], { corridor_id: "branch-5" });
+  const trunk = feature(["4", "5"], [P(200, 0), P(200, -400)], { corridor_id: "trunk-45" });
+  const result = applyCartographicJunctionOverrides([branch, trunk], { maxEndpointGapM: 80 });
+  assert.equal(result.appliedCount, 0);
+  assert.equal(result.features[0], branch);
+});
+
+test("Mott Haven override is inert when the 5 branch is too short to cut back", () => {
+  const branch = feature(["5"], [P(0, 20), P(20, 0)], { corridor_id: "branch-5" });
+  const trunk = feature(["4", "5"], [P(20, 0), P(0, -40)], { corridor_id: "trunk-45" });
+  const result = applyCartographicJunctionOverrides([branch, trunk], {
+    branchCutBackM: 450,
+    trunkMergeDownstreamM: 300,
+    maxEndpointGapM: 80,
+  });
+  assert.equal(result.appliedCount, 0);
+});
+
+test("empty schematic points still join through a linear sample and a duplicate vertex is tolerated", () => {
+  const branchCoords: Position[] = [
+    P(520, 270),
+    P(360, 275),
+    P(360, 275),
+    P(200, 275),
+    P(120, 270),
+    P(40, 330),
+    P(25, 290),
+    P(35, 250),
+  ];
+  const result = applyCartographicJunctionOverrides(
+    [
+      feature(["5"], branchCoords, { corridor_id: "branch-5" }),
+      feature(["4", "5"], MOTT_TRUNK, { corridor_id: "trunk-45" }),
+    ],
+    { ...MOTT_GATES, schematicPoints: [] },
+  );
+  assert.equal(result.appliedCount, 1);
+  assert.equal(result.features[0]?.properties.cartographic_junction_override, "mott_haven_5");
+});
+
+test("non-green and extra-route features do not satisfy the Mott Haven 5/4-5 pair", () => {
+  const red = feature(["5"], MOTT_BRANCH, { corridor_id: "red-5", color: "#EE352E" });
+  const extra = feature(["4", "5", "6"], MOTT_TRUNK, { corridor_id: "trunk-456" });
+  const result = applyCartographicJunctionOverrides([red, extra], MOTT_GATES);
+  assert.equal(result.appliedCount, 0);
+});
+
+test("a green line without route ids does not pair as Mott Haven 5", () => {
+  const unlabeled = feature(["5"], MOTT_BRANCH, { corridor_id: "no-routes" });
+  delete unlabeled.properties.route_ids;
+  delete unlabeled.properties.color_route_ids;
+  const trunk = feature(["4", "5"], MOTT_TRUNK, { corridor_id: "trunk-45" });
+  const colorless = feature(["5"], MOTT_BRANCH, { corridor_id: "no-color" });
+  delete colorless.properties.color;
+  const result = applyCartographicJunctionOverrides([unlabeled, trunk, colorless], MOTT_GATES);
+  assert.equal(result.appliedCount, 0, "missing routes or color must not invent a Mott Haven 5 pair");
 });

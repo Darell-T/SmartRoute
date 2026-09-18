@@ -16,8 +16,10 @@ from __future__ import annotations
 import secrets
 import unittest
 
+import pytest
 from app.services.agent import candidate_store
 from app.services.agent import trip_state as trip_state_module
+
 from tests.conversation.conversation_matrix_harness import (
     _turn_round,
     clear_caches,
@@ -92,7 +94,7 @@ def capture_temporary_candidate(session: dict, session_id: str):
     record = candidate_store.load_candidate_set(set_id, session_id=session_id)
     entry = next((c for c in (record or {}).get("candidates") or [] if isinstance(c, dict)), None)
     if record is None or entry is None:
-        raise AssertionError(f"temporary candidate set {set_id} not stored")
+        pytest.fail(f"temporary candidate set {set_id} not stored")
     return set_id, str(entry["candidate_id"]), record
 
 
@@ -256,8 +258,8 @@ class _WhatIfLifecycleBase(unittest.IsolatedAsyncioTestCase):
                              mode=mode, expected_prepare_input=TEMPORAL_INPUT,
                              expected_preference_patch={"avoid_crowds": False},
                              candidate_id=candidate_id)
-        self.assertEqual(trace.tool_calls[1][1]["departure_time"], TEMPORAL_DEPARTURE, f"{scenario_id} later departure")
-        self.assertEqual(route_cards(events)[0].depart_iso, TEMPORAL_DEPARTURE, f"{scenario_id} card departure")
+        assert trace.tool_calls[1][1]["departure_time"] == TEMPORAL_DEPARTURE, f"{scenario_id} later departure"
+        assert route_cards(events)[0].depart_iso == TEMPORAL_DEPARTURE, f"{scenario_id} card departure"
         return session, session_id, seed
 
     async def _bus_preview(self, *, mode, scenario_id, candidate_id=FIXED_PREVIEW_1,
@@ -275,78 +277,60 @@ class _WhatIfLifecycleBase(unittest.IsolatedAsyncioTestCase):
                                                         "preferred_modes": ["BUS"]},
                              candidate_id=candidate_id)
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["preferences"], state_before["preferences"], f"{scenario_id} active preferences unchanged")
-        self.assertEqual(session["profile"]["preferences"]["preferred_modes"], [], f"{scenario_id} profile preferences unchanged")
-        self.assertEqual(session.get("slots"), {}, f"{scenario_id} slots unchanged")
+        assert state["preferences"] == state_before["preferences"], f"{scenario_id} active preferences unchanged"
+        assert session["profile"]["preferences"]["preferred_modes"] == [], f"{scenario_id} profile preferences unchanged"
+        assert session.get("slots") == {}, f"{scenario_id} slots unchanged"
         _set_id, _candidate_id, record = capture_temporary_candidate(session, session_id)
-        self.assertEqual(record["tool_input"]["preferred_modes"], ["BUS"], f"{scenario_id} record owns the BUS patch")
+        assert record["tool_input"]["preferred_modes"] == ["BUS"], f"{scenario_id} record owns the BUS patch"
         return session, session_id, seed
 
     def _assert_preview(self, *, scenario_id, events, trace, mocks, session, session_id, seed,
                         state_before, mode, expected_prepare_input, expected_preference_patch, candidate_id):
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(
-            names,
-            ["declare_goals", "prepare_route_options", "present_route"],
-            f"{scenario_id} tools",
-        )
-        self.assertFalse(set(names) & set(FORBIDDEN), f"{scenario_id} forbidden tool")
+        assert names == ["declare_goals", "prepare_route_options", "present_route"], f"{scenario_id} tools"
+        assert not set(names) & set(FORBIDDEN), f"{scenario_id} forbidden tool"
         seam = mocks["prepare_single_leg"].await_args.args[0]
         for key, value in expected_prepare_input.items():
-            self.assertEqual(seam.get(key), value, f"{scenario_id} seam[{key}]")
-        self.assertEqual(seam["scenario"], "what_if", f"{scenario_id} scenario")
-        self.assertEqual(trace.tool_calls[1][1]["what_if"], True, f"{scenario_id} constrained what_if")
-        self.assertEqual(
-            trace.tool_calls[2][1],
-            {
-                "goal_key": "route",
-                "candidate_id": candidate_id,
-                "lead_in": "The route options were close, so I chose this one for your trip.",
-                "follow_up": "",
-                "reason_code": "meets_hard_constraints",
-            },
-            f"{scenario_id} preview present input",
-        )
+            assert seam.get(key) == value, f"{scenario_id} seam[{key}]"
+        assert seam["scenario"] == "what_if", f"{scenario_id} scenario"
+        assert trace.tool_calls[1][1]["what_if"] is True, f"{scenario_id} constrained what_if"
+        assert trace.tool_calls[2][1] == {"goal_key": "route", "candidate_id": candidate_id, "lead_in": "The route options were close, so I chose this one for your trip.", "follow_up": "", "reason_code": "meets_hard_constraints"}, f"{scenario_id} preview present input"
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual((trace.initial_mode, trace.final_mode), (expected_mode, expected_mode), scenario_id)
-        self.assertEqual([call["model"] for call in self.loop.client.messages.calls], [expected_model, expected_model], f"{scenario_id} models")
-        self.assertEqual(
-            {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]},
-            INITIAL_TOOL_PROFILE, f"{scenario_id} tool profile",
-        )
+        assert (trace.initial_mode, trace.final_mode) == (expected_mode, expected_mode), scenario_id
+        assert [call["model"] for call in self.loop.client.messages.calls] == [expected_model, expected_model], f"{scenario_id} models"
+        assert {schema["name"] for schema in self.loop.client.messages.calls[0]["tools"]} == INITIAL_TOOL_PROFILE, f"{scenario_id} tool profile"
         ready_profile = {
             schema["name"] for schema in self.loop.client.messages.calls[1]["tools"]
         }
-        self.assertEqual(ready_profile, {"complete_turn", "present_route"},
-                         f"{scenario_id} ready-evidence profile")
-        self.assertEqual(trace.model_call_count, 2, scenario_id)
-        self.assertEqual((events[0].type, events[-1].type, events[-1].stop_reason), ("meta", "done", "end_turn"), scenario_id)
+        assert ready_profile == {"complete_turn", "present_route"}, f"{scenario_id} ready-evidence profile"
+        assert trace.model_call_count == 2, scenario_id
+        assert (events[0].type, events[-1].type, events[-1].stop_reason) == ("meta", "done", "end_turn"), scenario_id
         cards = route_cards(events)
-        self.assertEqual([(len(cards), cards[0].role if cards else None)], [(1, "recommended")], f"{scenario_id} preview card")
+        assert [(len(cards), cards[0].role if cards else None)] == [(1, "recommended")], f"{scenario_id} preview card"
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual({key: state[key] for key in ACTIVE_KEYS}, {key: state_before[key] for key in ACTIVE_KEYS}, f"{scenario_id} active facts")
-        self.assertEqual(session["active_trip"]["card_id"], seed.card_id, scenario_id)
-        self.assertEqual([card["card_id"] for card in session["route_cards"]], [seed.card_id], f"{scenario_id} card not persisted")
+        assert {key: state[key] for key in ACTIVE_KEYS} == {key: state_before[key] for key in ACTIVE_KEYS}, f"{scenario_id} active facts"
+        assert session["active_trip"]["card_id"] == seed.card_id, scenario_id
+        assert [card["card_id"] for card in session["route_cards"]] == [seed.card_id], f"{scenario_id} card not persisted"
         set_id, stored_id, record = capture_temporary_candidate(session, session_id)
-        self.assertEqual(stored_id, candidate_id, scenario_id)
-        self.assertEqual(state["temporary_candidate_set_id"], set_id, scenario_id)
-        self.assertEqual(state["temporary_selected_candidate_id"], candidate_id, scenario_id)
-        self.assertEqual(state["temporary_base_candidate_set_id"], seed.candidate_set_id, scenario_id)
-        self.assertEqual(record["scenario_mode"], "what_if", scenario_id)
-        self.assertFalse(record["presented"], f"{scenario_id} unconsumed")
-        self.assertIsNone(record["selected_candidate_id"], scenario_id)
-        self.assertEqual(record["tool_input"]["scenario"], "what_if", scenario_id)
-        self.assertEqual(record["tool_input"].get("preference_patch"), expected_preference_patch, f"{scenario_id} patch")
-        self.assertEqual(mocks["prepare_single_leg"].await_count, 1, scenario_id)
+        assert stored_id == candidate_id, scenario_id
+        assert state["temporary_candidate_set_id"] == set_id, scenario_id
+        assert state["temporary_selected_candidate_id"] == candidate_id, scenario_id
+        assert state["temporary_base_candidate_set_id"] == seed.candidate_set_id, scenario_id
+        assert record["scenario_mode"] == "what_if", scenario_id
+        assert not record["presented"], f"{scenario_id} unconsumed"
+        assert record["selected_candidate_id"] is None, scenario_id
+        assert record["tool_input"]["scenario"] == "what_if", scenario_id
+        assert record["tool_input"].get("preference_patch") == expected_preference_patch, f"{scenario_id} patch"
+        assert mocks["prepare_single_leg"].await_count == 1, scenario_id
         # Candidate evidence is finalized by ``prepare_route_options``.  The
         # canonical presenter consumes that stored evidence and must not
         # re-enter the retired route-enrichment seam.
-        self.assertEqual(mocks["enrich_route"].await_count, 0, scenario_id)
-        self.assertEqual(mocks["lookup_arrivals"].await_count, 0, scenario_id)
-        self.assertEqual(len(mocks["stored_candidate_set_ids"]), 1, scenario_id)
+        assert mocks["enrich_route"].await_count == 0, scenario_id
+        assert mocks["lookup_arrivals"].await_count == 0, scenario_id
+        assert len(mocks["stored_candidate_set_ids"]) == 1, scenario_id
         lowered = trace.final_text.casefold()
         for marker in ("cd_", "cs_", "rc_"):
-            self.assertNotIn(marker, lowered, f"{scenario_id} leaked id")
+            assert marker not in lowered, f"{scenario_id} leaked id"
 
     def _assert_accept_gaps(self, *, scenario_id, session_id, mode, candidate_id):
         """Prove the accept turn exposes the stable public surface and the
@@ -358,128 +342,58 @@ class _WhatIfLifecycleBase(unittest.IsolatedAsyncioTestCase):
         initial_offered = {schema["name"] for schema in calls[0]["tools"]}
         offered = sorted({schema["name"] for schema in calls[-1]["tools"]})
         context = str(calls[0]["messages"][-1]["content"])
-        self.assertEqual(calls[0]["model"], policy_model(self.loop, mode)[1],
-                         f"{scenario_id} accept model")
+        assert calls[0]["model"] == policy_model(self.loop, mode)[1], f"{scenario_id} accept model"
         with self.subTest(gap="accept_model_request"):
-            self.assertEqual(
-                (initial_offered,
-                 set(offered),
-                 candidate_id in context),
-                (INITIAL_TOOL_PROFILE,
-                 {
-                     "complete_turn",
-                     "discover_places",
-                     "prepare_route_options",
-                     "present_route",
-                 },
-                 True),
-                f"{scenario_id} accept request evidence: "
-                f"offered_tools={offered}; "
-                f"initial_offered={sorted(initial_offered)}; "
-                f"state_valid_offered={offered}; "
-                f"temporary_identity_in_context={candidate_id in context}; "
-                f"context_tail={context[-500:]!r}",
-            )
+            assert (initial_offered, set(offered), candidate_id in context) == (INITIAL_TOOL_PROFILE, {"complete_turn", "discover_places", "prepare_route_options", "present_route"}, True), f"{scenario_id} accept request evidence session={session_id}: " f"offered_tools={offered}; " f"initial_offered={sorted(initial_offered)}; " f"state_valid_offered={offered}; " f"temporary_identity_in_context={candidate_id in context}; " f"context_tail={context[-500:]!r}"
 
     def _assert_accept_commit(self, *, scenario_id, events, trace, session, session_id, seed,
                               mode, candidate_id, set_id, expected_state):
         names = [name for name, _input in trace.tool_calls]
-        self.assertEqual(
-            names,
-            ["declare_goals", "present_route"],
-            f"{scenario_id} accept tools",
-        )
-        self.assertEqual(
-            trace.tool_calls[1][1],
-            {
-                "goal_key": "route",
-                "candidate_id": candidate_id,
-                "commit_scenario": True,
-                "lead_in": "The route options were close, so I chose this one for your trip.",
-                "follow_up": "",
-                "reason_code": "meets_hard_constraints",
-            },
-            f"{scenario_id} present input",
-        )
+        assert names == ["declare_goals", "present_route"], f"{scenario_id} accept tools"
+        assert trace.tool_calls[1][1] == {"goal_key": "route", "candidate_id": candidate_id, "commit_scenario": True, "lead_in": "The route options were close, so I chose this one for your trip.", "follow_up": "", "reason_code": "meets_hard_constraints"}, f"{scenario_id} present input"
         expected_mode, expected_model = policy_model(self.loop, mode)
-        self.assertEqual((trace.initial_mode, trace.final_mode, trace.model_call_count), (expected_mode, expected_mode, 2), scenario_id)
-        self.assertEqual([call["model"] for call in self.loop.client.messages.calls], [expected_model, expected_model], f"{scenario_id} accept model")
-        self.assertEqual((events[0].type, events[-1].type), ("meta", "done"), scenario_id)
+        assert (trace.initial_mode, trace.final_mode, trace.model_call_count) == (expected_mode, expected_mode, 2), scenario_id
+        assert [call["model"] for call in self.loop.client.messages.calls] == [expected_model, expected_model], f"{scenario_id} accept model"
+        assert (events[0].type, events[-1].type) == ("meta", "done"), scenario_id
         cards = route_cards(events)
-        self.assertEqual([(len(cards), cards[0].role if cards else None)], [(1, "recommended")], f"{scenario_id} commit card")
+        assert [(len(cards), cards[0].role if cards else None)] == [(1, "recommended")], f"{scenario_id} commit card"
         committed_card_id = cards[0].card_id
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual(state["active_candidate_set_id"], set_id, scenario_id)
-        self.assertEqual(state["selected_candidate_id"], candidate_id, scenario_id)
+        assert state["active_candidate_set_id"] == set_id, scenario_id
+        assert state["selected_candidate_id"] == candidate_id, scenario_id
         temp_ids = (
             state["temporary_candidate_set_id"],
             state["temporary_selected_candidate_id"],
             state["temporary_base_candidate_set_id"],
         )
-        self.assertEqual(temp_ids, (None, None, None), f"{scenario_id} temp cleared")
+        assert temp_ids == (None, None, None), f"{scenario_id} temp cleared"
         for key, value in expected_state.items():
-            self.assertEqual(state[key], value, f"{scenario_id} committed[{key}]")
+            assert state[key] == value, f"{scenario_id} committed[{key}]"
         record = candidate_store.load_candidate_set(set_id, session_id=session_id)
-        self.assertTrue(record["presented"], f"{scenario_id} consumed once")
-        self.assertEqual(record["selected_candidate_id"], candidate_id, scenario_id)
+        assert record["presented"], f"{scenario_id} consumed once"
+        assert record["selected_candidate_id"] == candidate_id, scenario_id
         original = candidate_store.load_candidate_set(seed.candidate_set_id, session_id=session_id)
-        self.assertTrue(original["presented"], scenario_id)
-        self.assertEqual(original["selected_candidate_id"], seed.candidate_id, scenario_id)
-        self.assertEqual(session["active_trip"]["card_id"], committed_card_id, scenario_id)
-        self.assertEqual([card["card_id"] for card in session["route_cards"]],
-                         [seed.card_id, committed_card_id],
-                         f"{scenario_id} one persisted committed card")
+        assert original["presented"], scenario_id
+        assert original["selected_candidate_id"] == seed.candidate_id, scenario_id
+        assert session["active_trip"]["card_id"] == committed_card_id, scenario_id
+        assert [card["card_id"] for card in session["route_cards"]] == [seed.card_id, committed_card_id], f"{scenario_id} one persisted committed card"
 
     def _assert_reject(self, *, scenario_id, events, trace, session, session_id, seed,
                        state_before, preview_set_id, preview_candidate_id):
-        self.assertEqual(
-            trace.tool_calls,
-            [
-                (
-                    "declare_goals",
-                    {
-                        "goals": [
-                            {
-                                "goal_key": "route",
-                                "kind": "route",
-                                "depends_on": [],
-                            }
-                        ]
-                    },
-                ),
-                (
-                    "complete_turn",
-                    {
-                        "goal_keys": ["route"],
-                        "outcome": "cancelled",
-                        "message": "Okay, keeping the original trip.",
-                    },
-                ),
-            ],
-            f"{scenario_id} cancellation tools",
-        )
-        self.assertEqual((events[0].type, events[-1].type), ("meta", "done"), scenario_id)
-        self.assertEqual(route_cards(events), [], scenario_id)
+        assert trace.tool_calls == [("declare_goals", {"goals": [{"goal_key": "route", "kind": "route", "depends_on": []}]}), ("complete_turn", {"goal_keys": ["route"], "outcome": "cancelled", "message": "Okay, keeping the original trip."})], f"{scenario_id} cancellation tools"
+        assert (events[0].type, events[-1].type) == ("meta", "done"), scenario_id
+        assert route_cards(events) == [], scenario_id
         state = trip_state_module.get_trip_state(session)
-        self.assertEqual({key: state[key] for key in ACTIVE_KEYS}, {key: state_before[key] for key in ACTIVE_KEYS}, f"{scenario_id} active facts")
-        self.assertEqual(session["active_trip"]["card_id"], seed.card_id, scenario_id)
-        self.assertEqual([card["card_id"] for card in session["route_cards"]],
-                         [seed.card_id], scenario_id)
+        assert {key: state[key] for key in ACTIVE_KEYS} == {key: state_before[key] for key in ACTIVE_KEYS}, f"{scenario_id} active facts"
+        assert session["active_trip"]["card_id"] == seed.card_id, scenario_id
+        assert [card["card_id"] for card in session["route_cards"]] == [seed.card_id], scenario_id
         with self.subTest(gap="reject_clears_temporary"):
-            self.assertEqual(
-                (state["temporary_candidate_set_id"],
-                 state["temporary_selected_candidate_id"],
-                 state["temporary_base_candidate_set_id"]),
-                (None, None, None),
-                f"{scenario_id} reject clears temporary",
-            )
+            assert (state["temporary_candidate_set_id"], state["temporary_selected_candidate_id"], state["temporary_base_candidate_set_id"]) == (None, None, None), f"{scenario_id} reject clears temporary"
         record = candidate_store.load_candidate_set(preview_set_id, session_id=session_id)
-        self.assertFalse(record["presented"], f"{scenario_id} unconsumed")
-        self.assertIsNone(record["selected_candidate_id"], scenario_id)
-        self.assertEqual(record["scenario_mode"], "what_if", scenario_id)
-        self.assertIn(preview_candidate_id,
-                      [item.get("candidate_id") for item in record.get("candidates") or []],
-                      f"{scenario_id} preview candidate auditable")
+        assert not record["presented"], f"{scenario_id} unconsumed"
+        assert record["selected_candidate_id"] is None, scenario_id
+        assert record["scenario_mode"] == "what_if", scenario_id
+        assert preview_candidate_id in [item.get("candidate_id") for item in record.get("candidates") or []], f"{scenario_id} preview candidate auditable"
 
     async def _executor_eligibility_probe(
         self, *, scenario_id, session, session_id, mode, seed, candidate_id,
@@ -509,22 +423,19 @@ class _WhatIfLifecycleBase(unittest.IsolatedAsyncioTestCase):
             if attempt["capability"] == "present_route"
         ]
         actual_ok = attempts[0]["ok"] if attempts else None
-        self.assertTrue(
-            attempts and attempts[0]["ok"] is False,
+        probe_detail = (
             f"{scenario_id} guarded stale-candidate probe: after rejection the "
-            f"server-owned temporary binding must be cleared and the real "
-            f"present executor invoked with the old candidate must fail; "
+            "server-owned temporary binding must be cleared and the real "
+            "present executor invoked with the old candidate must fail; "
             f"actual ok={actual_ok} (discard did not make the candidate "
-            f"ineligible; compounds the accept-path defect but is not evidence "
-            f"that the offered tool schema can reach it); "
+            "ineligible; compounds the accept-path defect but is not evidence "
+            "that the offered tool schema can reach it); "
             f"active_candidate_set_id={state['active_candidate_set_id']}; "
             f"temporary_candidate_set_id={state['temporary_candidate_set_id']}; "
-            f"route_card_events={len(route_cards(events))}",
+            f"route_card_events={len(route_cards(events))}"
         )
-        self.assertEqual(
-            state["active_candidate_set_id"], seed.candidate_set_id,
-            f"{scenario_id} probe must not promote; "
-            f"actual={state['active_candidate_set_id']}",
-        )
-        self.assertEqual(route_cards(events), [], f"{scenario_id} probe must not emit a card")
+        assert attempts, probe_detail
+        assert attempts[0]["ok"] is False, probe_detail
+        assert state["active_candidate_set_id"] == seed.candidate_set_id, f"{scenario_id} probe must not promote; " f"actual={state['active_candidate_set_id']}"
+        assert route_cards(events) == [], f"{scenario_id} probe must not emit a card"
         return events

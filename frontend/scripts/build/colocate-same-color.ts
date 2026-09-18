@@ -23,7 +23,6 @@ type ColocateFeatureProperties = {
   color?: string;
   corridor_id?: string;
   same_color_colocated?: boolean;
-  [key: string]: unknown;
 };
 
 type ColocateFeature = Feature<LineStringGeometry, ColocateFeatureProperties>;
@@ -35,7 +34,14 @@ type ColocateOptions = {
   blendM?: number;
 };
 
-type ColocateEntry = {
+type ColocateGates = {
+  minGapM: number;
+  maxGapM: number;
+  minStretchM: number;
+  blendM: number;
+};
+
+type ColocateLane = {
   feature: ColocateFeature;
   color: string;
   routeCount: number;
@@ -105,119 +111,128 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
+function polylineLengthM(coords: Position[]): number {
+  let total = 0;
+  for (let i = 1; i < coords.length; i += 1) total += distM(coords[i - 1], coords[i]);
+  return total;
+}
+
+function colocateLanes(lanes: ColocateFeature[]): ColocateLane[] {
+  return lanes
+    .filter(
+      (feature) =>
+        feature.geometry?.type === "LineString" &&
+        Array.isArray(feature.geometry.coordinates) &&
+        feature.geometry.coordinates.length >= 2,
+    )
+    .map((feature) => ({
+      feature,
+      color: String(feature.properties?.color ?? "").toUpperCase(),
+      routeCount: (feature.properties?.route_ids ?? []).length,
+      lengthM: polylineLengthM(feature.geometry.coordinates),
+    }));
+}
+
+function isOverlayLane(mover: ColocateLane, carrier: ColocateLane): boolean {
+  if (!mover.color || mover.color !== carrier.color) return false;
+  if (mover.routeCount < carrier.routeCount) return true;
+  return mover.routeCount === carrier.routeCount && mover.lengthM > carrier.lengthM;
+}
+
+function collectGapRuns(projections: Projection[], maxGapM: number): Array<[number, number]> {
+  let runStart: number | null = null;
+  const runs: Array<[number, number]> = [];
+  for (let index = 0; index <= projections.length; index += 1) {
+    const inRun = index < projections.length && projections[index].d <= maxGapM;
+    if (inRun && runStart === null) runStart = index;
+    if (!inRun && runStart !== null) {
+      runs.push([runStart, index - 1]);
+      runStart = null;
+    }
+  }
+  return runs;
+}
+
+function pullStretchOntoCarrier(
+  mover: ColocateLane,
+  from: number,
+  to: number,
+  projections: Projection[],
+  arc: number[],
+  gates: ColocateGates,
+): ColocateStretch | null {
+  const coords = mover.feature.geometry.coordinates;
+  const stretchLengthM = arc[to] - arc[from];
+  if (stretchLengthM < gates.minStretchM) return null;
+  const gaps: number[] = [];
+  for (let index = from; index <= to; index += 1) gaps.push(projections[index].d);
+  if (median(gaps) < gates.minGapM) return null;
+
+  const startBoundaryEases = from > 0;
+  const endBoundaryEases = to < coords.length - 1;
+  for (let index = from; index <= to; index += 1) {
+    let weight = 1;
+    if (startBoundaryEases) weight = Math.min(weight, ease((arc[index] - arc[from]) / gates.blendM));
+    if (endBoundaryEases) weight = Math.min(weight, ease((arc[to] - arc[index]) / gates.blendM));
+    if (weight <= 0) continue;
+    const target = projections[index].point;
+    coords[index] = [
+      coords[index][0] + (target[0] - coords[index][0]) * weight,
+      coords[index][1] + (target[1] - coords[index][1]) * weight,
+    ];
+  }
+  mover.feature.properties = {
+    ...mover.feature.properties,
+    same_color_colocated: true,
+  };
+  return {
+    routes: (mover.feature.properties.route_ids ?? []).join(","),
+    lengthM: Number(stretchLengthM.toFixed(0)),
+  };
+}
+
+function colocateMoverOntoCarrier(
+  mover: ColocateLane,
+  carrier: ColocateLane,
+  gates: ColocateGates,
+): ColocateStretch[] {
+  const moverCoords = mover.feature.geometry.coordinates;
+  const projections = moverCoords.map((vertex) => nearestOnPolyline(vertex, carrier.feature.geometry.coordinates));
+  const arc: number[] = [0];
+  for (let index = 1; index < moverCoords.length; index += 1) {
+    arc.push(arc[index - 1] + distM(moverCoords[index - 1], moverCoords[index]));
+  }
+  const stretches: ColocateStretch[] = [];
+  for (const [from, to] of collectGapRuns(projections, gates.maxGapM)) {
+    const stretch = pullStretchOntoCarrier(mover, from, to, projections, arc, gates);
+    if (stretch) stretches.push(stretch);
+  }
+  return stretches;
+}
+
 /**
  * Co-locate long parallel same-color stretches onto one track.
  *
  * Mutates mover geometry in place; flags movers with
  * `same_color_colocated: true`.
- *
- * @param {Array<GeoJSON.Feature>} lanes  bundle_lane features (post-bake).
- * @param {object} [options]
- * @param {number} [options.minGapM=10]   stretches whose median gap is below
- *   this already fuse in paint -- skip.
- * @param {number} [options.maxGapM=30]   beyond this the tracks genuinely
- *   diverge (Apple splits too).
- * @param {number} [options.minStretchM=500]  ignore short flirtations.
- * @param {number} [options.blendM=100]   ease length at stretch boundaries.
- * @returns {{count: number, stretches: Array<{routes: string, lengthM: number}>}}
  */
 export function colocateSameColorStretches(
   lanes: ColocateFeature[],
   options: ColocateOptions = {},
 ): ColocateResult {
-  const { minGapM = 10, maxGapM = 30, minStretchM = 500, blendM = 100 } = options;
-
-  const entries = lanes
-    .filter(
-      (f) =>
-        f.geometry?.type === "LineString" &&
-        Array.isArray(f.geometry.coordinates) &&
-        f.geometry.coordinates.length >= 2,
-    )
-    .map((f) => {
-      const coords = f.geometry.coordinates;
-      let lengthM = 0;
-      for (let i = 1; i < coords.length; i += 1) lengthM += distM(coords[i - 1], coords[i]);
-      return {
-        feature: f,
-        color: String(f.properties?.color ?? "").toUpperCase(),
-        routeCount: (f.properties?.route_ids ?? []).length,
-        lengthM,
-      };
-    });
-
+  const gates: ColocateGates = {
+    minGapM: options.minGapM ?? 10,
+    maxGapM: options.maxGapM ?? 30,
+    minStretchM: options.minStretchM ?? 500,
+    blendM: options.blendM ?? 100,
+  };
+  const entries = colocateLanes(lanes);
   const stretches: ColocateStretch[] = [];
-
   for (let i = 0; i < entries.length; i += 1) {
     for (let j = 0; j < entries.length; j += 1) {
-      if (i === j) continue;
-      const mover = entries[i];
-      const carrier = entries[j];
-      if (!mover.color || mover.color !== carrier.color) continue;
-      // The route-poorer lane is the overlay that gets pulled in. On a
-      // route-count tie the longer feature moves (see module docstring);
-      // exact ties in both are skipped (no defined overlay).
-      const moverByRoutes = mover.routeCount < carrier.routeCount;
-      const tieByLength =
-        mover.routeCount === carrier.routeCount && mover.lengthM > carrier.lengthM;
-      if (!moverByRoutes && !tieByLength) continue;
-
-      const mc = mover.feature.geometry.coordinates;
-      const cc = carrier.feature.geometry.coordinates;
-
-      // Per-vertex projection onto the carrier.
-      const proj = mc.map((v) => nearestOnPolyline(v, cc));
-
-      // Cumulative arc length along the mover.
-      const arc: number[] = [0];
-      for (let v = 1; v < mc.length; v += 1) arc.push(arc[v - 1] + distM(mc[v - 1], mc[v]));
-
-      // Maximal runs of vertices within maxGapM of the carrier.
-      let runStart: number | null = null;
-      const runs: Array<[number, number]> = [];
-      for (let v = 0; v <= mc.length; v += 1) {
-        const inRun = v < mc.length && proj[v] && proj[v].d <= maxGapM;
-        if (inRun && runStart === null) runStart = v;
-        if (!inRun && runStart !== null) {
-          runs.push([runStart, v - 1]);
-          runStart = null;
-        }
-      }
-
-      for (const [from, to] of runs) {
-        const lengthM = arc[to] - arc[from];
-        if (lengthM < minStretchM) continue;
-        const gaps: number[] = [];
-        for (let v = from; v <= to; v += 1) gaps.push(proj[v].d);
-        if (median(gaps) < minGapM) continue;
-
-        // Pull each vertex toward its projection, easing over blendM from
-        // both run boundaries (a boundary at a feature end gets no ease --
-        // the lane terminates on the carrier).
-        const startBoundaryEases = from > 0;
-        const endBoundaryEases = to < mc.length - 1;
-        for (let v = from; v <= to; v += 1) {
-          let w = 1;
-          if (startBoundaryEases) w = Math.min(w, ease((arc[v] - arc[from]) / blendM));
-          if (endBoundaryEases) w = Math.min(w, ease((arc[to] - arc[v]) / blendM));
-          if (w <= 0) continue;
-          const target = proj[v].point;
-          mc[v] = [
-            mc[v][0] + (target[0] - mc[v][0]) * w,
-            mc[v][1] + (target[1] - mc[v][1]) * w,
-          ];
-        }
-        mover.feature.properties = {
-          ...mover.feature.properties,
-          same_color_colocated: true,
-        };
-        stretches.push({
-          routes: (mover.feature.properties.route_ids ?? []).join(","),
-          lengthM: Number(lengthM.toFixed(0)),
-        });
-      }
+      if (i === j || !isOverlayLane(entries[i], entries[j])) continue;
+      stretches.push(...colocateMoverOntoCarrier(entries[i], entries[j], gates));
     }
   }
-
   return { count: stretches.length, stretches };
 }

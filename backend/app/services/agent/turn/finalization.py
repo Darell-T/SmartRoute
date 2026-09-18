@@ -7,9 +7,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.agent import session as session_module
 from app.services.agent.model import budget
 from app.services.agent.model import policy as agent_policy
-from app.services.agent import session as session_module
 from app.services.agent.turn import completion as turn_completion
 
 
@@ -20,7 +20,7 @@ class FinalizationResult:
     total_model_call_count: int
 
 
-def stage_timings(trace: "TurnTrace | None", started: float) -> dict[str, float]:
+def stage_timings(trace: TurnTrace | None, started: float) -> dict[str, float]:
     """Create the allowlisted timing map and preserve any upstream stages."""
 
     stage_ms = {
@@ -233,7 +233,7 @@ def record_model_call(
             record["first_token_ms"] = round(max(0.0, float(first_token_ms)))
         record.update(extract_safe_usage(usage))
         calls.append(record)
-    except Exception:
+    except (TypeError, ValueError, KeyError, AttributeError):
         return
 
 
@@ -248,7 +248,7 @@ def record_phase_ms(telemetry: dict[str, Any], name: str, elapsed_ms: float) -> 
         if name in phases:
             return
         phases[name] = round(max(0.0, float(elapsed_ms)))
-    except Exception:
+    except (TypeError, ValueError, KeyError, AttributeError):
         return
 
 

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.agent.tools._types import ToolContext, ToolResult
+from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.turn.contract import (
     ContractValidationError,
     GoalKind,
     TurnContract,
 )
-
 
 DECLARE_GOALS_SCHEMA = {
     "name": "declare_goals",

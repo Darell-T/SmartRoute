@@ -13,7 +13,7 @@ import { Check, ChevronDown } from "lucide-react";
 import { PromptInputAction } from "@/components/prompt-kit/prompt-input";
 import { Button } from "@/components/ui/button";
 import type { ResponsePresentationMode } from "@/lib/response-presentation";
-import type { ChatTheme } from "@/lib/use-chat-theme";
+import type { ChatTheme } from "@/lib/hooks/use-chat-theme";
 
 const RESPONSE_MODES: Array<{
   value: ResponsePresentationMode;

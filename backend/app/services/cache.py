@@ -1,10 +1,12 @@
-# cache.py - Redis Caching Wrapper with in-memory fallback
 import asyncio
+import logging
 import os
 import threading
 import time
 
 import redis
+
+_LOGGER = logging.getLogger(__name__)
 
 REDIS_CONNECT_TIMEOUT_S = float(os.getenv("REDIS_CONNECT_TIMEOUT_S", "0.5"))
 REDIS_READ_TIMEOUT_S = float(os.getenv("REDIS_READ_TIMEOUT_S", "1.0"))
@@ -20,14 +22,13 @@ redis_client = (
     else None
 )
 
-# In-memory cache used when Redis is not configured: {key: (value, expires_at)}
 _mem: dict = {}
 _mem_lock = threading.Lock()
 _FAIL_OPEN_LOG_COOLDOWN_SECONDS = 60
 _last_fail_open_log = 0.0
 
 if redis_client is None:
-    print("[cache] REDIS_URL not set — using in-memory cache")
+    _LOGGER.warning("[cache] REDIS_URL not set — using in-memory cache")
 
 
 _DELETE_IF_VALUE_SCRIPT = """
@@ -100,9 +101,11 @@ def _log_fail_open(operation: str, exc: Exception) -> None:
     if now - _last_fail_open_log < _FAIL_OPEN_LOG_COOLDOWN_SECONDS:
         return
     _last_fail_open_log = now
-    print(
-        f"[cache] Redis {operation} failed; optional provider cache is using "
-        f"process memory ({type(exc).__name__})"
+    _LOGGER.warning(
+        "[cache] Redis %s failed; optional provider cache is using "
+        "process memory (%s)",
+        operation,
+        type(exc).__name__,
     )
 
 
@@ -120,6 +123,16 @@ def cache_get(key, *, fail_open: bool = False):
     return _memory_get(key)
 
 
+def _redis_mget(unique_keys: list, fail_open: bool) -> dict:
+    result = dict(zip(unique_keys, redis_client.mget(unique_keys), strict=True))
+    if not fail_open:
+        return result
+    return {
+        key: value if value is not None else _memory_get(key)
+        for key, value in result.items()
+    }
+
+
 def cache_get_many(keys, *, fail_open: bool = False) -> dict:
     """Read many keys in one round trip; missing keys map to None."""
     unique_keys = list(dict.fromkeys(keys))
@@ -127,14 +140,7 @@ def cache_get_many(keys, *, fail_open: bool = False) -> dict:
         return {}
     if redis_client is not None:
         try:
-            values = redis_client.mget(unique_keys)
-            result = dict(zip(unique_keys, values, strict=True))
-            if fail_open:
-                result = {
-                    key: value if value is not None else _memory_get(key)
-                    for key, value in result.items()
-                }
-            return result
+            return _redis_mget(unique_keys, fail_open)
         except redis.exceptions.RedisError as exc:
             if not fail_open:
                 raise

@@ -1,16 +1,12 @@
-"""System prompt and per-turn context builder."""
-
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 
-from app.services.agent import candidate_store
-from app.services.agent import discovery_store
+from app.services.agent import candidate_store, discovery_store, public_surface
 from app.services.agent import profile as profile_module
-from app.services.agent import public_surface
 from app.services.agent import session as session_module
 from app.services.agent import trip_state as trip_state_module
-
 
 SINGLE_AGENT_SYSTEM_PROMPT = """You are SmartRoute, a conversational NYC transit and local-movement agent.
 You interpret each rider turn, use the authoritative session context, and
@@ -134,8 +130,11 @@ DISCOVERY AND CARD REFERENCING:
 - A new named destination in the current rider turn supersedes the accepted
   trip destination. Prepare it with destination_source=current_turn and pass
   its verified place_id or explicit destination. Never omit the new endpoint
-  and inherit the old one. If that name resolves to multiple plausible
-  branches, ask which location the rider means. Use
+  and inherit the old one. If the rider names a brand without a neighborhood,
+  address, or other branch detail, use discover_places operation=search and
+  keep plausible physical branches as separate candidates. If the rider names
+  a specific branch, keep that branch fixed and use operation=verify; never
+  switch branches without permission. Use
   destination_source=accepted_trip only when continuing or replanning the same
   accepted endpoint.
 - For "tell me more about the second one" or another details-only reference,
@@ -186,6 +185,40 @@ DISCOVERY AND CARD REFERENCING:
   options?"
 - Capabilities for independent goals may run together. A dependent route may
   use an opaque place selected from ready discovery evidence.
+QUEUE EVIDENCE:
+- Queue evidence is optional place context inside discover_places and
+  present_places, not another capability. The eight-capability vocabulary does
+  not change. Set queue_context only for the current destination decision.
+- Use mode=heads_up for ordinary place discovery. Use mode=ignore when the
+  rider explicitly says the line does not matter. Use mode=decision when wait
+  affects the choice, and copy any exact rider threshold into
+  max_wait_minutes. Use mode=historical for usual, past, or last-known queue
+  questions. Never invent a global threshold such as 15 minutes; judge vague
+  words such as long in the rider's context.
+- present_places owns every rider-facing queue number, timestamp, coverage
+  statement, and source. Do not repeat, rewrite, predict, or calculate with
+  those facts. A current wait is a join-now estimate, not a wait at arrival,
+  and it does not include order fulfillment. Never add it to route time.
+- When queue evidence affects a dependent destination-and-route choice, call
+  present_places with only the selected place before present_route. This emits
+  the canonical queue disclosure and source without showing a shortlist.
+- A missing venue-registry match means only that queue coverage is unknown.
+  Never infer that an unmonitored place is less popular, less crowded, or has
+  a shorter line. Current and historical evidence are not equivalent. An exact
+  current wait threshold cannot be satisfied from history or missing coverage.
+- Ask only when mixed current, historical, or missing coverage could
+  realistically change the destination choice. If the rider's other priorities
+  resolve the choice, act on them. If the rider says pick one, choose using the
+  supported place and route facts and state the coverage caveat without becoming
+  indecisive.
+- If a requested destination's live wait materially conflicts with the rider's
+  stated preference, ask whether to proceed or see alternatives. In Auto, a new
+  search may present four or five useful alternatives. Quick keeps its existing
+  three-place cap. Keep searching unseen candidates through the existing
+  exclude_presented flow; never recycle a shown place.
+- Queue information is conversational only. Never put it on maps, route cards,
+  route steps, profiles, or later decisions. Never request or interpret cameras,
+  images, video, streams, or other media. Never calculate a queue trend or slope.
 WEB SEARCH POLICY: Native web_search may be offered only after a structured
 discover_places search attempt. Use it for current qualitative recommendation
 context that structured place data cannot answer, or to recover candidate
@@ -324,8 +357,122 @@ def active_system_prompt() -> str:
     return SINGLE_AGENT_SYSTEM_PROMPT
 
 
-def _is_usable_system_prompt(prompt: str) -> bool:
-    return bool(prompt and prompt.strip())
+def _place_label(place: object) -> str:
+    if not isinstance(place, dict):
+        return ""
+    return str(place.get("label") or "").strip()
+
+
+def _saved_place_labels(profile: dict) -> dict[str, object]:
+    labels: dict[str, object] = {}
+    places = profile.get("places") or {}
+    for slot in ("home", "work"):
+        label = _place_label(places.get(slot))
+        if label:
+            labels[slot] = label
+    other_labels = [
+        label
+        for key in ("saved_places", "frequent_places")
+        for place in profile.get(key) or []
+        if (label := _place_label(place))
+    ]
+    if other_labels:
+        labels["other"] = list(dict.fromkeys(other_labels))
+    return labels
+
+
+def _trip_digest(state: dict, session_key: str) -> dict[str, object]:
+    return {
+        "origin": state.get("origin"),
+        "destination": state.get("destination"),
+        "waypoints": discovery_store.display_waypoint_labels(
+            list(state.get("waypoints") or []),
+            session_id=session_key,
+            discovery_set_id=state.get("active_discovery_set_id"),
+        ),
+        "planning_mode": state.get("planning_mode"),
+        "preferences": state.get("preferences") or {},
+        "has_active_candidate_set": bool(state.get("active_candidate_set_id")),
+        "has_temporary_scenario": bool(state.get("temporary_candidate_set_id")),
+        "has_active_discovery_set": bool(state.get("active_discovery_set_id")),
+        "has_selected_candidate": bool(state.get("selected_candidate_id")),
+        "has_selected_place": bool(state.get("selected_place_id")),
+    }
+
+
+def _accepted_endpoint_digest(state: dict) -> dict[str, object] | None:
+    if not (
+        state.get("origin")
+        and state.get("destination")
+        and state.get("active_candidate_set_id")
+        and state.get("selected_candidate_id")
+    ):
+        return None
+    return {
+        "origin": state["origin"],
+        "destination": state["destination"],
+        "source": "accepted_trip",
+        "clarification_required": False,
+    }
+
+
+def _accepted_route_comparison(state: dict, session_key: str) -> dict | None:
+    candidate_set_id = str(state.get("active_candidate_set_id") or "").strip()
+    selected_candidate_id = str(state.get("selected_candidate_id") or "").strip()
+    if not candidate_set_id or not selected_candidate_id:
+        return None
+    return candidate_store.load_accepted_route_comparison(
+        candidate_set_id,
+        selected_candidate_id,
+        session_id=session_key,
+    )
+
+
+def _route_card_digest(cards: object) -> list[dict[str, object]] | None:
+    if not cards:
+        return None
+    return [
+        {
+            "card_id": card.get("card_id"),
+            "role": card.get("role"),
+            "lines": card.get("lines"),
+            "eta_minutes": card.get("eta_minutes"),
+        }
+        for card in cards
+    ]
+
+
+def _active_trip_digest(active_trip: object) -> dict[str, object] | None:
+    if not isinstance(active_trip, dict):
+        return None
+    return {
+        "card_id": active_trip.get("card_id"),
+        "lines": active_trip.get("lines"),
+        "destination": active_trip.get("destination"),
+        "first_boarding": active_trip.get("first_boarding"),
+    }
+
+
+def _pending_trip_digest(pending_trip: object) -> dict[str, object] | None:
+    if not isinstance(pending_trip, dict):
+        return None
+    if pending_trip.get("status") in {None, "none"}:
+        return None
+    return {
+        "status": pending_trip.get("status"),
+        "summary": pending_trip.get("summary"),
+    }
+
+
+def _json_context_lines(
+    rows: tuple[tuple[str, object, bool], ...],
+    dump: dict[str, object],
+) -> list[str]:
+    return [
+        f"{label}: {json.dumps(payload, **dump, sort_keys=sort_keys)}"
+        for label, payload, sort_keys in rows
+        if payload
+    ]
 
 
 def build_turn_context(
@@ -337,163 +484,49 @@ def build_turn_context(
     session_id: str | None = None,
 ) -> str:
     presentation = "quick" if response_presentation == "quick" else "auto"
+    bound = session if isinstance(session, dict) else {}
+    session_key = str(session_id or "").strip()
     lines = [f"now: {now_et}", f"response_presentation: {presentation}"]
-    if origin and origin.get("lat") is not None and origin.get("lng") is not None:
-        try:
-            lines.append(
-                f"rider_location: {float(origin['lat']):.4f},{float(origin['lng']):.4f}"
-            )
-        except (TypeError, ValueError):
-            pass
-    profile = profile_module.get_profile(session if isinstance(session, dict) else {})
-    saved_place_labels: dict[str, object] = {}
-    for slot in ("home", "work"):
-        place = (profile.get("places") or {}).get(slot)
-        if isinstance(place, dict) and str(place.get("label") or "").strip():
-            saved_place_labels[slot] = str(place["label"]).strip()
-    other_labels = [
-        str(place.get("label") or "").strip()
-        for key in ("saved_places", "frequent_places")
-        for place in profile.get(key) or []
-        if isinstance(place, dict) and str(place.get("label") or "").strip()
-    ]
-    if other_labels:
-        saved_place_labels["other"] = list(dict.fromkeys(other_labels))
-    if saved_place_labels:
-        # Labels/slots only: coordinates, addresses, and provider ids remain
-        # server-owned and are resolved inside prepare_route_options.
+    with suppress(TypeError, ValueError, KeyError):
+        point = origin or {}
         lines.append(
-            "saved_places: "
-            f"{json.dumps(saved_place_labels, separators=(',', ':'), sort_keys=True)}"
+            f"rider_location: {float(point['lat']):.4f},{float(point['lng']):.4f}"
         )
-
-    slots = (session or {}).get("slots") or {}
-    if slots:
-        lines.append(
-            f"known_slots: {json.dumps(slots, separators=(',', ':'), sort_keys=True, default=str)}"
-        )
-
-    state = trip_state_module.get_trip_state(
-        session if isinstance(session, dict) else {}
+    profile = profile_module.get_profile(bound)
+    saved_place_labels = _saved_place_labels(profile)
+    state = trip_state_module.get_trip_state(bound)
+    slots = bound.get("slots") or {}
+    continuations = session_module.get_pending_continuations(bound)
+    discovery = discovery_store.sanitized_discovery_context(bound, session_key)
+    comparison = _accepted_route_comparison(state, session_key)
+    replay = public_surface.active_route_replay(bound)
+    temporary_id = state.get("temporary_selected_candidate_id")
+    dump = {"separators": (",", ":"), "default": str}
+    trip_digest = _trip_digest(state, session_key)
+    continuation_digest = (
+        [continuation.to_dict() for continuation in continuations]
+        if continuations
+        else None
     )
-    # Compact rider-safe trip context only; no coordinates or internal payloads.
-    trip_digest = {
-        "origin": state.get("origin"),
-        "destination": state.get("destination"),
-        "waypoints": discovery_store.display_waypoint_labels(
-            list(state.get("waypoints") or []),
-            session_id=str(session_id or "").strip(),
-            discovery_set_id=state.get("active_discovery_set_id"),
-        ),
-        "planning_mode": state.get("planning_mode"),
-        "preferences": state.get("preferences") or {},
-        "has_active_candidate_set": bool(state.get("active_candidate_set_id")),
-        "has_temporary_scenario": bool(state.get("temporary_candidate_set_id")),
-        "has_active_discovery_set": bool(state.get("active_discovery_set_id")),
-        "has_selected_candidate": bool(state.get("selected_candidate_id")),
-        "has_selected_place": bool(state.get("selected_place_id")),
-    }
-    lines.append(
-        f"trip_state: {json.dumps(trip_digest, separators=(',', ':'), default=str)}"
+    leading_json = (
+        ("saved_places", saved_place_labels, True),
+        ("known_slots", slots, True),
+        ("trip_state", trip_digest, False),
+        ("pending_continuations", continuation_digest, False),
+        ("accepted_route_endpoints", _accepted_endpoint_digest(state), False),
+        ("accepted_route_replay", replay, True),
     )
-
-    continuations = session_module.get_pending_continuations(session)
-    if continuations:
-        lines.append(
-            "pending_continuations: "
-            + json.dumps(
-                [continuation.to_dict() for continuation in continuations],
-                separators=(",", ":"),
-            )
-        )
-    if (
-        state.get("origin")
-        and state.get("destination")
-        and state.get("active_candidate_set_id")
-        and state.get("selected_candidate_id")
-    ):
-        endpoint_resolution = {
-            "origin": state["origin"],
-            "destination": state["destination"],
-            "source": "accepted_trip",
-            "clarification_required": False,
-        }
-        lines.append(
-            "accepted_route_endpoints: "
-            f"{json.dumps(endpoint_resolution, separators=(',', ':'), default=str)}"
-        )
-
-    accepted_route_replay = public_surface.active_route_replay(session)
-    if accepted_route_replay:
-        replay_json = json.dumps(
-            accepted_route_replay,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        lines.append(f"accepted_route_replay: {replay_json}")
-    temporary_candidate_id = state.get("temporary_selected_candidate_id")
-    if temporary_candidate_id:
-        lines.append(f"temporary_candidate_id: {temporary_candidate_id}")
-    discovery = discovery_store.sanitized_discovery_context(
-        session if isinstance(session, dict) else {},
-        str(session_id or "").strip(),
+    trailing_json = (
+        ("active_discovery", discovery, False),
+        ("recent_route_cards", _route_card_digest(bound.get("route_cards")), False),
+        ("active_trip", _active_trip_digest(bound.get("active_trip")), False),
+        ("accepted_route_comparison", comparison, False),
+        ("pending_trip", _pending_trip_digest(bound.get("pending_trip")), False),
     )
-    if discovery:
-        lines.append(
-            "active_discovery: "
-            f"{json.dumps(discovery, separators=(',', ':'), default=str)}"
-        )
-    cards = (session or {}).get("route_cards") or []
-    if cards:
-        digest = [
-            {
-                "card_id": card.get("card_id"),
-                "role": card.get("role"),
-                "lines": card.get("lines"),
-                "eta_minutes": card.get("eta_minutes"),
-            }
-            for card in cards
-        ]
-        lines.append(
-            f"recent_route_cards: {json.dumps(digest, separators=(',', ':'), default=str)}"
-        )
-    active_trip = (session or {}).get("active_trip")
-    if isinstance(active_trip, dict):
-        active_digest = {
-            "card_id": active_trip.get("card_id"),
-            "lines": active_trip.get("lines"),
-            "destination": active_trip.get("destination"),
-            "first_boarding": active_trip.get("first_boarding"),
-        }
-        lines.append(
-            f"active_trip: {json.dumps(active_digest, separators=(',', ':'), default=str)}"
-        )
-    candidate_set_id = str(state.get("active_candidate_set_id") or "").strip()
-    selected_candidate_id = str(state.get("selected_candidate_id") or "").strip()
-    if candidate_set_id and selected_candidate_id:
-        comparison = candidate_store.load_accepted_route_comparison(
-            candidate_set_id,
-            selected_candidate_id,
-            session_id=str(session_id or "").strip(),
-        )
-        if comparison:
-            lines.append(
-                "accepted_route_comparison: "
-                f"{json.dumps(comparison, separators=(',', ':'), default=str)}"
-            )
-    pending_trip = (session or {}).get("pending_trip")
-    if isinstance(pending_trip, dict) and pending_trip.get("status") not in {
-        None,
-        "none",
-    }:
-        pending_digest = {
-            "status": pending_trip.get("status"),
-            "summary": pending_trip.get("summary"),
-        }
-        lines.append(
-            f"pending_trip: {json.dumps(pending_digest, separators=(',', ':'), default=str)}"
-        )
-
+    lines.extend(_json_context_lines(leading_json, dump))
+    if temporary_id:
+        lines.append(f"temporary_candidate_id: {temporary_id}")
+    lines.extend(_json_context_lines(trailing_json, dump))
     if selected_card_id:
         lines.append(f"selected_card_id: {selected_card_id}")
     body = "\n".join(lines)

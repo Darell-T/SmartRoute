@@ -11,9 +11,17 @@ import asyncio
 import json
 from pathlib import Path
 
-from evaluation.route_intelligence.comparison import compare_all_scenarios, compare_scenario, render_human_report
+from evaluation.route_intelligence.comparison import (
+    compare_all_scenarios,
+    compare_scenario,
+    render_human_report,
+)
 from evaluation.route_intelligence.failure_modes import run_source_ablations
-from evaluation.route_intelligence.replay import ScenarioValidationError, load_all_scenarios, load_scenario
+from evaluation.route_intelligence.replay import (
+    ScenarioValidationError,
+    load_all_scenarios,
+    load_scenario,
+)
 from evaluation.route_intelligence.reporting import build_fixture_validation_results
 
 
@@ -34,47 +42,83 @@ async def _run(args: argparse.Namespace) -> list[dict]:
 async def _validation_details(args: argparse.Namespace, reports: list[dict]) -> tuple[list[dict], dict]:
     scenarios = [load_scenario(args.scenario)] if args.scenario else load_all_scenarios()
     if [item.scenario_id for item in scenarios] != [str(row.get("scenario_id")) for row in reports]:
-        raise ScenarioValidationError("comparison report order does not match replay scenarios")
+        order_mismatch = "comparison report order does not match replay scenarios"
+        raise ScenarioValidationError(order_mismatch)
     ablations = [await run_source_ablations(scenario) for scenario in scenarios]
     return ablations, build_fixture_validation_results(reports, scenarios, ablations)
 
 
+def _print_validation_error(exc: ScenarioValidationError) -> int:
+    print(f"Replay validation error: {exc}")
+    return 2
+
+
+def _write_text(path: Path | None, text: str) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _write_json(path: Path | None, payload: object) -> None:
+    if path is None:
+        return
+    _write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _run_reports(args: argparse.Namespace) -> list[dict] | int:
+    try:
+        return asyncio.run(_run(args))
+    except ScenarioValidationError as exc:
+        return _print_validation_error(exc)
+
+
+def _validation_payload(
+    args: argparse.Namespace, reports: list[dict]
+) -> tuple[list[dict] | None, dict | None] | int:
+    if not (args.json_out or args.metrics_out or args.ablations_out):
+        return None, None
+    try:
+        return asyncio.run(_validation_details(args, reports))
+    except ScenarioValidationError as exc:
+        return _print_validation_error(exc)
+
+
+def _write_outputs(
+    args: argparse.Namespace,
+    machine: dict,
+    rendered: str,
+    ablations: list[dict] | None,
+    validation: dict | None,
+) -> None:
+    _write_json(args.json_out, machine)
+    _write_text(args.text_out, rendered + "\n")
+    if validation is not None:
+        _write_json(args.metrics_out, validation)
+    if ablations is not None:
+        _write_json(args.ablations_out, {"ablations": ablations})
+
+
 def main() -> int:
     args = _arguments()
-    try:
-        reports = asyncio.run(_run(args))
-    except ScenarioValidationError as exc:
-        print(f"Replay validation error: {exc}")
-        return 2
-    machine = {"reports": reports, "all_expectations_matched": all(row["comparison"]["matched_expectation"] for row in reports)}
-    ablations: list[dict] | None = None
-    validation: dict | None = None
-    if args.json_out or args.metrics_out or args.ablations_out:
-        try:
-            ablations, validation = asyncio.run(_validation_details(args, reports))
-        except ScenarioValidationError as exc:
-            print(f"Replay validation error: {exc}")
-            return 2
+    reports = _run_reports(args)
+    if isinstance(reports, int):
+        return reports
+    machine = {
+        "reports": reports,
+        "all_expectations_matched": all(
+            row["comparison"]["matched_expectation"] for row in reports
+        ),
+    }
+    extras = _validation_payload(args, reports)
+    if isinstance(extras, int):
+        return extras
+    ablations, validation = extras
+    if validation is not None:
         machine["ablations"] = ablations
         machine["validation"] = validation
     rendered = "\n\n".join(render_human_report(report) for report in reports)
-    if args.json_out:
-        args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(json.dumps(machine, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    if args.text_out:
-        args.text_out.parent.mkdir(parents=True, exist_ok=True)
-        args.text_out.write_text(rendered + "\n", encoding="utf-8")
-    if args.metrics_out and validation is not None:
-        args.metrics_out.parent.mkdir(parents=True, exist_ok=True)
-        args.metrics_out.write_text(
-            json.dumps(validation, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-    if args.ablations_out and ablations is not None:
-        args.ablations_out.parent.mkdir(parents=True, exist_ok=True)
-        args.ablations_out.write_text(
-            json.dumps({"ablations": ablations}, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+    _write_outputs(args, machine, rendered, ablations, validation)
     print(rendered)
     return 0 if machine["all_expectations_matched"] else 1
 

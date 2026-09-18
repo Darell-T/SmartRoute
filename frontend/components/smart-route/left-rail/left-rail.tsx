@@ -17,8 +17,8 @@ import type {
   Station,
   TabId,
 } from "./types";
-import { RouteView } from "./route-view";
-import { AlertsView } from "./alerts-view";
+import { RouteView } from "./route-view/route-view";
+import { AlertsView } from "./alerts/alerts-view";
 
 type ArrivalFilter = Direction;
 

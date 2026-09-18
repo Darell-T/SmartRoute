@@ -1,18 +1,19 @@
-"""Dispatch transit evidence requests and own their operation handlers.
-
-The public tool and leaf operations intentionally share this module so the
-dispatch boundary, provider seams, and operation behavior have one canonical
-import surface.
-"""
-
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from app.services.agent import candidate_store, trip_state
+from app.services.agent.tools.base import ToolContext, ToolOutcome, ToolResult
+from app.services.agent.tools.transit import (
+    accessibility_status,
+    check_area_conditions,
+    lookup_arrivals,
+    lookup_facts,
+)
 from app.services.agent.tools.transit import evidence as transit_evidence
 from app.services.agent.tools.transit import venue_crowd_window as venues
 from app.services.agent.tools.transit.direction import (
@@ -23,11 +24,6 @@ from app.services.agent.tools.transit.direction import (
     resolve_direction,
     resolve_model_direction,
 )
-from app.services.agent.tools.transit import accessibility_status
-from app.services.agent.tools.transit import check_area_conditions
-from app.services.agent.tools.transit import lookup_arrivals
-from app.services.agent.tools.transit import lookup_facts
-from app.services.agent.tools._types import ToolContext, ToolOutcome, ToolResult
 from app.services.agent.tools.transit.transit_snapshot import collect_service_status
 from app.services.trips.crowds import event_provider
 
@@ -64,29 +60,9 @@ def prepare_direction(
         session=ctx.session,
         gtfs=ctx.gtfs,
     )
-    if explicit_direction and not direction_resolution.resolved:
-        candidate_resolution, _ = _candidate_direction(
-            ctx, route_ids, requested=explicit_direction
-        )
-        if candidate_resolution is not None:
-            direction_resolution = candidate_resolution
-    elif not explicit_direction:
-        candidate_resolution, candidate_found = _candidate_direction(ctx, route_ids)
-        if candidate_found:
-            direction_resolution = candidate_resolution or DirectionResolution(
-                requested=None,
-                resolved=None,
-                authoritative=False,
-            )
-        elif route_ids:
-            accepted_direction = accepted_trip_direction(ctx, route_ids)
-            if accepted_direction:
-                direction_resolution = resolve_model_direction(
-                    accepted_direction,
-                    route_ids,
-                    session=ctx.session,
-                    gtfs=ctx.gtfs,
-                )
+    direction_resolution = _complete_direction(
+        direction_resolution, explicit_direction, route_ids, ctx
+    )
     prepared_fields = fields
     if direction_resolution.resolved:
         prepared_fields = dict(fields)
@@ -100,11 +76,44 @@ def prepare_direction(
     return prepared_fields, direction_resolution, needs_clarification
 
 
+def _complete_direction(
+    direction_resolution: DirectionResolution,
+    explicit_direction: str | None,
+    route_ids: list[str],
+    ctx: ToolContext,
+) -> DirectionResolution:
+    if explicit_direction and not direction_resolution.resolved:
+        candidate_resolution, _ = _candidate_direction(
+            ctx, route_ids, requested=explicit_direction
+        )
+        if candidate_resolution is not None:
+            return candidate_resolution
+        return direction_resolution
+    if explicit_direction:
+        return direction_resolution
+    candidate_resolution, candidate_found = _candidate_direction(ctx, route_ids)
+    if candidate_found:
+        return candidate_resolution or DirectionResolution(
+            requested=None,
+            resolved=None,
+            authoritative=False,
+        )
+    if not route_ids:
+        return direction_resolution
+    accepted_direction = accepted_trip_direction(ctx, route_ids)
+    if not accepted_direction:
+        return direction_resolution
+    return resolve_model_direction(
+        accepted_direction,
+        route_ids,
+        session=ctx.session,
+        gtfs=ctx.gtfs,
+    )
+
+
 def _is_unproven_accepted_headsign(
     ctx: ToolContext, route_ids: list[str], value: str | None
 ) -> bool:
-    """Reject an accepted-trip headsign echoed without current-turn support."""
-
     requested = normalize_direction_text(value)
     if not requested or resolve_direction(value).resolved:
         return False
@@ -118,23 +127,32 @@ def _is_unproven_accepted_headsign(
     wanted = {str(route).strip().upper() for route in route_ids if str(route).strip()}
     if not wanted:
         return False
-    rows = []
+    return any(
+        _row_echoes_headsign(row, wanted, requested)
+        for row in _accepted_trip_rows(active_trip)
+    )
+
+
+def _accepted_trip_rows(active_trip: dict) -> list[dict]:
+    rows: list[dict] = []
     boarding = active_trip.get("first_boarding")
     if isinstance(boarding, dict):
         rows.append(boarding)
     itinerary = active_trip.get("canonical_itinerary")
-    if isinstance(itinerary, dict):
-        legs = itinerary.get("legs")
-        if isinstance(legs, list):
-            rows.extend(leg for leg in legs if isinstance(leg, dict))
-    for row in rows:
-        route = str(row.get("route_id") or row.get("service_id") or "").strip().upper()
-        if wanted and route not in wanted:
-            continue
-        for key in ("headsign", "direction", "direction_label"):
-            if normalize_direction_text(row.get(key)) == requested:
-                return True
-    return False
+    legs = itinerary.get("legs") if isinstance(itinerary, dict) else None
+    if isinstance(legs, list):
+        rows.extend(leg for leg in legs if isinstance(leg, dict))
+    return rows
+
+
+def _row_echoes_headsign(row: dict, wanted: set[str], requested: str) -> bool:
+    route = str(row.get("route_id") or row.get("service_id") or "").strip().upper()
+    if wanted and route not in wanted:
+        return False
+    return any(
+        normalize_direction_text(row.get(key)) == requested
+        for key in ("headsign", "direction", "direction_label")
+    )
 
 
 def _candidate_direction(
@@ -143,55 +161,56 @@ def _candidate_direction(
     *,
     requested: str | None = None,
 ) -> tuple[DirectionResolution | None, bool]:
-    """Resolve direction from matching canonical legs in the active set."""
+    record = _active_candidate_record(ctx)
+    if record is None or not route_ids:
+        return None, False
+    wanted = {str(route).strip().upper() for route in route_ids if str(route).strip()}
+    resolutions, matching = _matching_candidate_resolutions(
+        record, wanted, requested=requested
+    )
+    if resolutions is None:
+        return None, True
+    if not matching or not resolutions:
+        return None, matching
+    return _unique_authoritative_direction(resolutions)
 
+
+def _active_candidate_record(ctx: ToolContext) -> dict[str, Any] | None:
     session = ctx.session
     session_id = str(ctx.session_id or "").strip()
-    if not isinstance(session, dict) or not session_id or not route_ids:
-        return None, False
+    if not isinstance(session, dict) or not session_id:
+        return None
     state = trip_state.get_trip_state(session)
     set_id = str(state.get("active_candidate_set_id") or "").strip()
     if not set_id:
-        return None, False
+        return None
     record = candidate_store.load_candidate_set(set_id, session_id=session_id)
-    if not isinstance(record, dict):
-        return None, False
-    wanted = {str(route).strip().upper() for route in route_ids if str(route).strip()}
+    return record if isinstance(record, dict) else None
+
+
+def _matching_candidate_resolutions(
+    record: dict[str, Any],
+    wanted: set[str],
+    *,
+    requested: str | None,
+) -> tuple[list[DirectionResolution] | None, bool]:
     resolutions: list[DirectionResolution] = []
     matching = False
     for candidate in record.get("candidates") or []:
-        if not isinstance(candidate, dict):
-            continue
-        digest = candidate.get("digest")
-        if not isinstance(digest, dict):
-            continue
-        candidate_routes = {
-            str(route).strip().upper()
-            for route in (digest.get("transit_lines") or digest.get("route_ids") or [])
-            if str(route).strip()
-        }
-        if not candidate_routes.intersection(wanted):
-            continue
-        matching = True
-        itinerary = digest.get("_canonical_itinerary")
-        legs = itinerary.get("legs") if isinstance(itinerary, dict) else None
-        if not isinstance(legs, list):
+        found, candidate_matching = _candidate_leg_resolutions(
+            candidate, wanted, requested=requested
+        )
+        if found is None:
             return None, True
-        candidate_resolutions = []
-        for leg in legs:
-            if not isinstance(leg, dict) or not _is_matching_transit_leg(leg, wanted):
-                continue
-            resolution = _candidate_leg_direction(leg, requested=requested)
-            if resolution is None:
-                if requested:
-                    continue
-                return None, True
-            candidate_resolutions.append(resolution)
-        if not candidate_resolutions and not requested:
-            return None, True
-        resolutions.extend(candidate_resolutions)
-    if not matching or not resolutions:
-        return None, matching
+        if candidate_matching:
+            matching = True
+            resolutions.extend(found)
+    return resolutions, matching
+
+
+def _unique_authoritative_direction(
+    resolutions: list[DirectionResolution],
+) -> tuple[DirectionResolution | None, bool]:
     keys = {_direction_key(item.resolved) for item in resolutions}
     if "" in keys or len(keys) != 1:
         return None, True
@@ -202,6 +221,66 @@ def _candidate_direction(
         authoritative=True,
         matched_value=selected.matched_value,
     ), True
+
+
+def _candidate_leg_resolutions(
+    candidate: object,
+    wanted: set[str],
+    *,
+    requested: str | None,
+) -> tuple[list[DirectionResolution] | None, bool]:
+    legs, matching = _candidate_digest_legs(candidate, wanted)
+    if legs is None:
+        return None, matching
+    if not matching:
+        return [], False
+    found = _resolutions_from_legs(legs, wanted, requested=requested)
+    if found is None:
+        return None, True
+    if not found and not requested:
+        return None, True
+    return found, True
+
+
+def _candidate_digest_legs(
+    candidate: object, wanted: set[str]
+) -> tuple[list[dict[str, Any]] | None, bool]:
+    if not isinstance(candidate, dict):
+        return [], False
+    digest = candidate.get("digest")
+    if not isinstance(digest, dict):
+        return [], False
+    candidate_routes = {
+        str(route).strip().upper()
+        for route in (digest.get("transit_lines") or digest.get("route_ids") or [])
+        if str(route).strip()
+    }
+    if not candidate_routes.intersection(wanted):
+        return [], False
+    itinerary = digest.get("_canonical_itinerary")
+    legs = itinerary.get("legs") if isinstance(itinerary, dict) else None
+    if not isinstance(legs, list):
+        return None, True
+    return legs, True
+
+
+def _resolutions_from_legs(
+    legs: list[dict[str, Any]],
+    wanted: set[str],
+    *,
+    requested: str | None,
+) -> list[DirectionResolution] | None:
+    candidate_resolutions: list[DirectionResolution] = []
+    for leg in legs:
+        if not isinstance(leg, dict) or not _is_matching_transit_leg(leg, wanted):
+            continue
+        resolution = _candidate_leg_direction(leg, requested=requested)
+        if resolution is None:
+            if requested:
+                continue
+            return None
+        candidate_resolutions.append(resolution)
+    return candidate_resolutions
 
 
 def _is_matching_transit_leg(leg: dict[str, Any], wanted: set[str]) -> bool:
@@ -253,19 +332,28 @@ async def arrivals(
     if not fields.get("direction"):
         fields = dict(fields)
         fields["direction"] = accepted_trip_direction(ctx, route_ids)
-    calls = [
-        services.lookup_arrivals.execute(
-            {
-                "route_id": route_id,
-                "stop_source": fields.get("stop_source") or "auto",
-                **({"stop_query": fields["stop_query"]} if fields["stop_query"] else {}),
-                **({"direction": fields["direction"]} if fields["direction"] else {}),
-            },
-            ctx,
+    results = await asyncio.gather(
+        *(
+            services.lookup_arrivals.execute(
+                {
+                    "route_id": route_id,
+                    "stop_source": fields.get("stop_source") or "auto",
+                    **(
+                        {"stop_query": fields["stop_query"]}
+                        if fields["stop_query"]
+                        else {}
+                    ),
+                    **(
+                        {"direction": fields["direction"]}
+                        if fields["direction"]
+                        else {}
+                    ),
+                },
+                ctx,
+            )
+            for route_id in route_ids[:3]
         )
-        for route_id in route_ids[:3]
-    ]
-    results = await asyncio.gather(*calls)
+    )
     if len(results) == 1:
         return services.wrap(
             "arrivals",
@@ -276,9 +364,29 @@ async def arrivals(
             concerns=concerns,
             direction_resolution=direction_resolution,
         )
-    if any(not result.ok for result in results):
-        failed = next(result for result in results if not result.ok)
+    failed = next((result for result in results if not result.ok), None)
+    if failed is not None:
         return services.wrap("arrivals", failed, ctx)
+    return _merged_arrivals_result(
+        results,
+        route_ids,
+        fields,
+        concerns,
+        ctx,
+        direction_resolution=direction_resolution,
+        services=services,
+    )
+
+def _merged_arrivals_result(
+    results: list[ToolResult],
+    route_ids: list[str],
+    fields: dict[str, str | None],
+    concerns: list[str],
+    ctx: ToolContext,
+    *,
+    direction_resolution: DirectionResolution,
+    services: OperationServices,
+) -> ToolResult:
     merged = {"operation": "arrivals", "results": [result.data for result in results]}
     grounded = services.grounding_succeeded("arrivals", merged, ok=True)
     services.note_transit(ctx, grounded, "arrivals", data=merged)
@@ -332,45 +440,15 @@ async def accessibility(
     station = fields["station"]
     if not station:
         return ToolResult(ok=False, error="accessibility requires station")
-    binding = None
-    if _accessibility_provenance(fields) == "accepted_trip":
-        binding, binding_error = services.transit_evidence.bind_accessibility_target(
-            station,
-            ctx.session,
-            route_ids,
-        )
-        if binding_error:
-            return ToolResult(
-                ok=False, error=binding_error, outcome=ToolOutcome.UNAVAILABLE
-            )
-        if binding is None:
-            return ToolResult(
-                ok=False,
-                error="the accepted itinerary is unavailable for accessibility lookup",
-                outcome=ToolOutcome.UNAVAILABLE,
-            )
+    bound = _admit_accessibility_binding(fields, route_ids, ctx, services)
+    if isinstance(bound, ToolResult):
+        return bound
+    binding, bound_routes = bound
     result = await services.accessibility_status.execute({"station": station}, ctx)
-    if result.ok and isinstance(result.data, dict):
-        if binding is not None and not services.transit_evidence.accessibility_result_matches(
-            result.data, binding
-        ):
-            return ToolResult(
-                ok=False,
-                error="accessibility evidence did not match the accepted station",
-                outcome=ToolOutcome.UNAVAILABLE,
-            )
-        result.data = {
-            **result.data,
-            "source": "mta_accessibility",
-            "freshness": "current",
-            "observed_at": datetime.now(timezone.utc).isoformat(),
-            **({"binding": binding} if binding is not None else {}),
-        }
-    bound_routes = (
-        [str(route).strip().upper() for route in binding.get("route_ids") or []]
-        if binding is not None
-        else route_ids
-    )
+    mismatch = _accessibility_mismatch(result, binding, services)
+    if mismatch is not None:
+        return mismatch
+    _stamp_accessibility_provenance(result, binding)
     return services.wrap(
         "accessibility",
         result,
@@ -378,6 +456,68 @@ async def accessibility(
         route_ids=bound_routes,
         fields=fields,
     )
+
+
+def _admit_accessibility_binding(
+    fields: dict[str, str | None],
+    route_ids: list[str],
+    ctx: ToolContext,
+    services: OperationServices,
+) -> tuple[dict[str, Any] | None, list[str]] | ToolResult:
+    if _accessibility_provenance(fields) != "accepted_trip":
+        return None, route_ids
+    binding, binding_error = services.transit_evidence.bind_accessibility_target(
+        fields["station"],
+        ctx.session,
+        route_ids,
+    )
+    if binding_error:
+        return ToolResult(
+            ok=False, error=binding_error, outcome=ToolOutcome.UNAVAILABLE
+        )
+    if binding is None:
+        return ToolResult(
+            ok=False,
+            error="the accepted itinerary is unavailable for accessibility lookup",
+            outcome=ToolOutcome.UNAVAILABLE,
+        )
+    bound_routes = [
+        str(route).strip().upper() for route in binding.get("route_ids") or []
+    ]
+    return binding, bound_routes
+
+
+def _accessibility_mismatch(
+    result: ToolResult,
+    binding: dict[str, Any] | None,
+    services: OperationServices,
+) -> ToolResult | None:
+    if (
+        binding is None
+        or not result.ok
+        or not isinstance(result.data, dict)
+        or services.transit_evidence.accessibility_result_matches(result.data, binding)
+    ):
+        return None
+    return ToolResult(
+        ok=False,
+        error="accessibility evidence did not match the accepted station",
+        outcome=ToolOutcome.UNAVAILABLE,
+    )
+
+
+def _stamp_accessibility_provenance(
+    result: ToolResult, binding: dict[str, Any] | None
+) -> None:
+    if not (result.ok and isinstance(result.data, dict)):
+        return
+    result.data = {
+        **result.data,
+        "source": "mta_accessibility",
+        "freshness": "current",
+        "observed_at": datetime.now(UTC).isoformat(),
+        **({"binding": binding} if binding is not None else {}),
+    }
 
 
 def _accessibility_provenance(fields: dict[str, str | None]) -> str:

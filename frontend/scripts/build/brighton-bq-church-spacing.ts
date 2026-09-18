@@ -1,4 +1,4 @@
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { Feature, FeatureProps, LineStringGeometry, Position } from "./types.ts";
 
 export type Vector = [number, number];
 
@@ -9,22 +9,7 @@ type BBox = {
   maxLat: number;
 };
 
-type BrightonProperties = {
-  corridor_id?: unknown;
-  color?: unknown;
-  route_id?: unknown;
-  route_ids?: unknown;
-  color_route_ids?: unknown;
-  brighton_bq_church_spacing?: boolean;
-  brighton_bq_church_min_before_m?: number | null;
-  brighton_bq_church_min_after_m?: number | null;
-  brighton_bq_church_core_min_after_m?: number | null;
-  brighton_bq_church_centerline_fit?: CenterlineFit | null;
-  brighton_bq_church_max_turn_after_degrees?: number | null;
-  [key: string]: unknown;
-};
-
-type BrightonFeature = Feature<LineStringGeometry, BrightonProperties>;
+type BrightonFeature = Feature<LineStringGeometry, FeatureProps>;
 
 export type ArcRange = {
   startArc: number;
@@ -496,6 +481,71 @@ export function orientationNeedsReverse(left: Position[], right: Position[]): bo
   );
 }
 
+type BalancedSampleOffset = {
+  yellowOut: Position[];
+  orangeOut: Position[];
+  coreMask: boolean[];
+};
+
+type CoreFractions = {
+  coreStartFraction: number;
+  coreEndFraction: number;
+};
+
+function yellowSignForPair(
+  centers: Position[],
+  yellowSamples: Position[],
+  options: BalancedOptions,
+): number {
+  if (options.forcedASign !== undefined) return options.forcedASign;
+  let signSum = 0;
+  for (let index = 0; index < centers.length; index += 1) {
+    const normal = normalAt(centers, index);
+    const lat = centers[index][1];
+    const center = projectAt(centers[index], lat);
+    const yellow = projectAt(yellowSamples[index], lat);
+    signSum += (yellow[0] - center[0]) * normal[0] + (yellow[1] - center[1]) * normal[1];
+  }
+  return signSum < 0 ? -1 : 1;
+}
+
+function offsetBalancedSamples(
+  centers: Position[],
+  yellowSamples: Position[],
+  orangeSamples: Position[],
+  centerArcs: number[],
+  yellowSign: number,
+  options: BalancedOptions,
+): BalancedSampleOffset {
+  const centerTotal = centerArcs[centerArcs.length - 1] || 1;
+  const coreStartArc = centerTotal * Math.max(0, Math.min(1, options.coreStartFraction));
+  const coreEndArc = centerTotal * Math.max(0, Math.min(1, options.coreEndFraction));
+  const yellowOut: Position[] = [];
+  const orangeOut: Position[] = [];
+  const coreMask: boolean[] = [];
+  for (let index = 0; index < centers.length; index += 1) {
+    const normal = normalAt(centers, index);
+    const existingSeparation = haversineM(yellowSamples[index], orangeSamples[index]);
+    const separation = Math.max(existingSeparation, options.targetSeparationM);
+    const generatedYellow = offsetPoint(centers[index], normal, yellowSign * separation * 0.5);
+    const generatedOrange = offsetPoint(centers[index], normal, -yellowSign * separation * 0.5);
+    let distanceToCore = 0;
+    if (centerArcs[index] < coreStartArc) distanceToCore = coreStartArc - centerArcs[index];
+    else if (centerArcs[index] > coreEndArc) distanceToCore = centerArcs[index] - coreEndArc;
+    const distanceToReplacementEdge = Math.min(centerArcs[index], centerTotal - centerArcs[index]);
+    const blendDistance = options.blendFromCore ? distanceToCore : distanceToReplacementEdge;
+    let blend = 1;
+    if (!(options.blendM <= 0)) {
+      const t = Math.min(1, blendDistance / options.blendM);
+      blend = options.blendFromCore ? 1 - smoothstep(t) : smoothstep(t);
+    }
+    coreMask.push(centerArcs[index] >= coreStartArc && centerArcs[index] <= coreEndArc);
+    yellowOut.push(lerpPoint(yellowSamples[index], generatedYellow, blend));
+    orangeOut.push(lerpPoint(orangeSamples[index], generatedOrange, blend));
+  }
+  return { yellowOut, orangeOut, coreMask };
+}
+
 export function buildBalancedPair(
   yellowSegment: Position[],
   orangeSegment: Position[],
@@ -514,59 +564,21 @@ export function buildBalancedPair(
   const fittedCenterline = fitHermiteCenterline(rawCenters);
   const centers = smoothCenterline(fittedCenterline.coords, options.smoothingPasses);
   const centerArcs = cumulativeArcs(centers);
-  const centerTotal = centerArcs[centerArcs.length - 1] || 1;
-  const coreStartArc = centerTotal * Math.max(0, Math.min(1, options.coreStartFraction));
-  const coreEndArc = centerTotal * Math.max(0, Math.min(1, options.coreEndFraction));
-
-  let signSum = 0;
-  for (let index = 0; index < centers.length; index += 1) {
-    const normal = normalAt(centers, index);
-    const lat = centers[index][1];
-    const center = projectAt(centers[index], lat);
-    const yellow = projectAt(yellowSamples[index], lat);
-    signSum += (yellow[0] - center[0]) * normal[0] + (yellow[1] - center[1]) * normal[1];
-  }
-  const yellowSign = options.forcedASign ?? (signSum < 0 ? -1 : 1);
-
-  const yellowOut: Position[] = [];
-  const orangeOut: Position[] = [];
-  const coreMask: boolean[] = [];
-  for (let index = 0; index < centers.length; index += 1) {
-    const normal = normalAt(centers, index);
-    const existingSeparation = haversineM(yellowSamples[index], orangeSamples[index]);
-    const separation = Math.max(existingSeparation, options.targetSeparationM);
-    const generatedYellow = offsetPoint(centers[index], normal, yellowSign * separation * 0.5);
-    const generatedOrange = offsetPoint(centers[index], normal, -yellowSign * separation * 0.5);
-    const distanceToCore =
-      centerArcs[index] < coreStartArc
-        ? coreStartArc - centerArcs[index]
-        : centerArcs[index] > coreEndArc
-          ? centerArcs[index] - coreEndArc
-          : 0;
-    const distanceToReplacementEdge = Math.min(centerArcs[index], centerTotal - centerArcs[index]);
-    const blendDistance = options.blendFromCore ? distanceToCore : distanceToReplacementEdge;
-    const blend =
-      options.blendM <= 0
-        ? 1
-        : options.blendFromCore
-          ? 1 - smoothstep(Math.min(1, blendDistance / options.blendM))
-          : smoothstep(Math.min(1, blendDistance / options.blendM));
-    coreMask.push(centerArcs[index] >= coreStartArc && centerArcs[index] <= coreEndArc);
-    yellowOut.push(lerpPoint(yellowSamples[index], generatedYellow, blend));
-    orangeOut.push(lerpPoint(orangeSamples[index], generatedOrange, blend));
-  }
+  const yellowSign = yellowSignForPair(centers, yellowSamples, options);
+  const { yellowOut, orangeOut, coreMask } = offsetBalancedSamples(
+    centers,
+    yellowSamples,
+    orangeSamples,
+    centerArcs,
+    yellowSign,
+    options,
+  );
   const coreYellow = yellowOut.filter((_, index) => coreMask[index]);
   const coreOrange = orangeOut.filter((_, index) => coreMask[index]);
 
   return {
     yellow: yellowOut,
     orange: reversedOrange ? orangeOut.slice().reverse() : orangeOut,
-    // Which side of the fitted centerline "yellow"/a landed on (+1 or -1),
-    // independent of `reversedOrange` (that only affects array order, not
-    // physical side). Callers outside the Brighton hotspot -- notably
-    // shared-corridor-separation-stage.ts -- use this to write an accurate
-    // lane_slot_semantic so the renderer's paint z-order reflects the actual
-    // geometric side rather than falling back to a color-rank tiebreak.
     aSign: yellowSign,
     minBeforeM: minSeparationM(yellowSamples, orangeOriented),
     minAfterM: minSeparationM(yellowOut, orangeOut),
@@ -579,6 +591,54 @@ export function buildBalancedPair(
         ? minSeparationM(coreYellow, coreOrange)
         : minSeparationM(yellowOut, orangeOut),
   };
+}
+
+function findBrightonMember(
+  features: BrightonFeature[],
+  bbox: BBox,
+  color: string,
+  routeId: string,
+): BrightonFeature | undefined {
+  return features.find((feature) => (
+    isLineFeature(feature) &&
+    String(feature.properties?.color ?? "").toUpperCase() === color &&
+    hasRoute(feature, routeId) &&
+    feature.geometry.coordinates.some((coord) => inBBox(coord, bbox))
+  ));
+}
+
+function brightonDiagnosticsForPair(
+  yellow: BrightonFeature | undefined,
+  orange: BrightonFeature | undefined,
+): BrightonDiagnostics {
+  return {
+    applied: false,
+    reason: null,
+    yellow_corridor_id: yellow?.properties?.corridor_id ?? null,
+    orange_corridor_id: orange?.properties?.corridor_id ?? null,
+    min_separation_before_m: null,
+    min_separation_after_m: null,
+    core_min_separation_after_m: null,
+    centerline_fit: null,
+    max_centerline_turn_after_degrees: null,
+  };
+}
+
+function coreFractionsForPair(
+  yellowRange: ArcRange,
+  orangeRange: ArcRange,
+  yellowCoreRange: ArcRange,
+  orangeCoreRange: ArcRange,
+): CoreFractions {
+  const yellowSpan = Math.max(1, yellowRange.endArc - yellowRange.startArc);
+  const orangeSpan = Math.max(1, orangeRange.endArc - orangeRange.startArc);
+  const yellowCoreStart = (yellowCoreRange.startArc - yellowRange.startArc) / yellowSpan;
+  const yellowCoreEnd = (yellowCoreRange.endArc - yellowRange.startArc) / yellowSpan;
+  const orangeCoreStart = (orangeCoreRange.startArc - orangeRange.startArc) / orangeSpan;
+  const orangeCoreEnd = (orangeCoreRange.endArc - orangeRange.startArc) / orangeSpan;
+  const coreStartFraction = Math.max(0, Math.min(1, (yellowCoreStart + orangeCoreStart) / 2));
+  const coreEndFraction = Math.max(coreStartFraction, Math.min(1, (yellowCoreEnd + orangeCoreEnd) / 2));
+  return { coreStartFraction, coreEndFraction };
 }
 
 export function applyBrightonBqChurchSpacing(
@@ -596,30 +656,9 @@ export function applyBrightonBqChurchSpacing(
     ...rawOptions,
   };
 
-  const yellow = features.find((feature) => (
-    isLineFeature(feature) &&
-    String(feature.properties?.color ?? "").toUpperCase() === YELLOW &&
-    hasRoute(feature, "Q") &&
-    feature.geometry.coordinates.some((coord) => inBBox(coord, options.bbox))
-  ));
-  const orange = features.find((feature) => (
-    isLineFeature(feature) &&
-    String(feature.properties?.color ?? "").toUpperCase() === ORANGE &&
-    hasRoute(feature, "B") &&
-    feature.geometry.coordinates.some((coord) => inBBox(coord, options.bbox))
-  ));
-
-  const diagnostics: BrightonDiagnostics = {
-    applied: false,
-    reason: null,
-    yellow_corridor_id: yellow?.properties?.corridor_id ?? null,
-    orange_corridor_id: orange?.properties?.corridor_id ?? null,
-    min_separation_before_m: null,
-    min_separation_after_m: null,
-    core_min_separation_after_m: null,
-    centerline_fit: null,
-    max_centerline_turn_after_degrees: null,
-  };
+  const yellow = findBrightonMember(features, options.bbox, YELLOW, "Q");
+  const orange = findBrightonMember(features, options.bbox, ORANGE, "B");
+  const diagnostics = brightonDiagnosticsForPair(yellow, orange);
 
   if (!yellow || !orange) {
     diagnostics.reason = "missing_bq_features";
@@ -646,15 +685,12 @@ export function applyBrightonBqChurchSpacing(
     return { features, diagnostics };
   }
 
-  const yellowSpan = Math.max(1, yellowRange.endArc - yellowRange.startArc);
-  const orangeSpan = Math.max(1, orangeRange.endArc - orangeRange.startArc);
-  const yellowCoreStart = (yellowCoreRange.startArc - yellowRange.startArc) / yellowSpan;
-  const yellowCoreEnd = (yellowCoreRange.endArc - yellowRange.startArc) / yellowSpan;
-  const orangeCoreStart = (orangeCoreRange.startArc - orangeRange.startArc) / orangeSpan;
-  const orangeCoreEnd = (orangeCoreRange.endArc - orangeRange.startArc) / orangeSpan;
-  const coreStartFraction = Math.max(0, Math.min(1, (yellowCoreStart + orangeCoreStart) / 2));
-  const coreEndFraction = Math.max(coreStartFraction, Math.min(1, (yellowCoreEnd + orangeCoreEnd) / 2));
-
+  const { coreStartFraction, coreEndFraction } = coreFractionsForPair(
+    yellowRange,
+    orangeRange,
+    yellowCoreRange,
+    orangeCoreRange,
+  );
   const balanced = buildBalancedPair(yellowSegment, orangeSegment, {
     ...options,
     coreStartFraction,

@@ -41,6 +41,7 @@ import {
 } from "../../brighton-bq-church-spacing.ts";
 import type { BalancedOptions } from "../../brighton-bq-church-spacing.ts";
 import type { LineFeature, Position } from "../shared/types.ts";
+import { routeIdsOf } from "../shared/route-config.ts";
 
 const FLOOR_SEPARATION_M = 13; // matches Church Ave targetSeparationM
 const TAPER_M = 40;
@@ -147,31 +148,7 @@ function buildProximityIndex(candidates: SeparationCandidate[]): Set<number>[] {
 // A lone feature endpoint in open track is NOT a junction and must not be
 // excluded -- that would blind the checks near every corridor tail.
 const ENDPOINT_CLUSTER_M = 25;
-function collectJunctionPoints(features: LineFeature[]): Position[] {
-  const points: Position[] = [];
-  const endpoints: { p: Position; feature: LineFeature }[] = [];
-  for (const f of features) {
-    const coords = f.geometry?.coordinates;
-    if (!Array.isArray(coords) || coords.length < 2) continue;
-    const role = String(f.properties?.bundle_materialization_role ?? "");
-    if (EXCLUDED_ROLES.has(role)) {
-      points.push(coords[0], coords[coords.length - 1]);
-    }
-    if (f.geometry?.type === "LineString") {
-      endpoints.push({ p: coords[0], feature: f });
-      endpoints.push({ p: coords[coords.length - 1], feature: f });
-    }
-  }
-  for (let i = 0; i < endpoints.length; i += 1) {
-    for (let j = i + 1; j < endpoints.length; j += 1) {
-      if (endpoints[i].feature === endpoints[j].feature) continue;
-      if (haversineM(endpoints[i].p, endpoints[j].p) <= ENDPOINT_CLUSTER_M) {
-        points.push(endpoints[i].p, endpoints[j].p);
-      }
-    }
-  }
-  return points;
-}
+
 function nearAnyJunctionPoint(point: Position, junctionPoints: Position[], maxM: number): boolean {
   for (const jp of junctionPoints) {
     if (haversineM(point, jp) <= maxM) return true;
@@ -186,7 +163,12 @@ function nearAnyJunctionPoint(point: Position, junctionPoints: Position[], maxM:
 // read as 13-21m "separation" (measured: B/Q near Newkirk Plaza, 1.48m real
 // vs ~17m index-paired). Nearest-neighbor is what a viewer sees. The b side
 // is resampled at the same density to bound the O(samples * segments) cost.
-function pointwiseSeparation(aSeg: Position[], bSeg: Position[], sampleM: number): { seps: number[]; count: number } {
+type PointwiseSeparation = {
+  seps: number[];
+  count: number;
+};
+
+function pointwiseSeparation(aSeg: Position[], bSeg: Position[], sampleM: number): PointwiseSeparation {
   const segLen = Math.max(lengthM(aSeg), lengthM(bSeg));
   const count = Math.max(8, Math.ceil(segLen / sampleM));
   const aSamples = samplePolyline(aSeg, count);
@@ -388,6 +370,31 @@ type HotspotResult = {
   detail: string;
 };
 
+type SharedPair = {
+  a: SeparationCandidate;
+  b: SeparationCandidate;
+  ext: SharedArcExtent;
+};
+
+type WindowFit = {
+  yellow: Position[];
+  orange: Position[];
+  aSign: number;
+  wStart: number;
+  wEnd: number;
+  coreStart: number;
+  coreEnd: number;
+};
+
+type PendingReplacement = {
+  feature: SeparationCandidate;
+  start: number;
+  end: number;
+  coords: Position[];
+};
+
+type ClaimedRanges = Map<LineFeature, [number, number][]>;
+
 function featureLabel(f: LineFeature): string {
   return String(
     f.properties?.physical_bundle_id ??
@@ -397,28 +404,72 @@ function featureLabel(f: LineFeature): string {
   );
 }
 
-export function applySharedCorridorSeparationStage({
-  bundleArtifacts,
-  separationReportJsonPath,
-}: SharedCorridorSeparationStageInput): void {
-  const target = bundleArtifacts.visualFeatures;
-  const candidates = target.filter(isCandidate);
-  const junctionPoints = collectJunctionPoints(target);
-  const nearbyIndex = buildProximityIndex(candidates);
+function collectExcludedRoleEndpoints(features: LineFeature[]): Position[] {
+  const points: Position[] = [];
+  for (const feature of features) {
+    const coords = feature.geometry?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    const role = String(feature.properties?.bundle_materialization_role ?? "");
+    if (EXCLUDED_ROLES.has(role)) points.push(coords[0], coords[coords.length - 1]);
+  }
+  return points;
+}
 
-  const pairs: { a: SeparationCandidate; b: SeparationCandidate; ext: SharedArcExtent }[] = [];
+function collectEndpointClusters(features: LineFeature[]): Position[] {
+  const endpoints: { point: Position; feature: LineFeature }[] = [];
+  for (const feature of features) {
+    const coords = feature.geometry?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2) continue;
+    if (feature.geometry?.type !== "LineString") continue;
+    endpoints.push({ point: coords[0], feature });
+    endpoints.push({ point: coords[coords.length - 1], feature });
+  }
+  const points: Position[] = [];
+  for (let i = 0; i < endpoints.length; i += 1) {
+    for (let j = i + 1; j < endpoints.length; j += 1) {
+      if (endpoints[i].feature === endpoints[j].feature) continue;
+      if (haversineM(endpoints[i].point, endpoints[j].point) <= ENDPOINT_CLUSTER_M) {
+        points.push(endpoints[i].point, endpoints[j].point);
+      }
+    }
+  }
+  return points;
+}
+
+function rangeBlocked(claimed: ClaimedRanges, feature: LineFeature, start: number, end: number) {
+  const ranges = claimed.get(feature);
+  if (!ranges) return false;
+  return ranges.some(([rangeStart, rangeEnd]) =>
+    !(end + TAPER_M < rangeStart || start - TAPER_M > rangeEnd),
+  );
+}
+
+function claimRange(claimed: ClaimedRanges, feature: LineFeature, start: number, end: number) {
+  const ranges = claimed.get(feature);
+  if (ranges) ranges.push([start, end]);
+  else claimed.set(feature, [[start, end]]);
+}
+
+function classifySharedCorridorPairs(target: LineFeature[]) {
+  const candidates = target.filter(isCandidate);
+  const junctionPoints = [
+    ...collectExcludedRoleEndpoints(target),
+    ...collectEndpointClusters(target),
+  ];
+  const nearbyIndex = buildProximityIndex(candidates);
+  const pairs: SharedPair[] = [];
   const seenPairs = new Set<string>();
   for (let i = 0; i < candidates.length; i += 1) {
     for (const j of nearbyIndex[i]) {
-      if (j <= i) continue; // dedupe: only process each unordered pair once
+      if (j <= i) continue;
       const pairKey = `${i}|${j}`;
       if (seenPairs.has(pairKey)) continue;
       seenPairs.add(pairKey);
       const a = candidates[i];
       const b = candidates[j];
-      if (String(a.properties.color).toUpperCase() === String(b.properties.color).toUpperCase()) continue;
-      // A feature pair can share MORE THAN ONE corridor (branch off, run
-      // apart, rejoin) -- each shared stretch is enforced independently.
+      if (String(a.properties.color).toUpperCase() === String(b.properties.color).toUpperCase()) {
+        continue;
+      }
       const exts = findSharedArcExtents(a.geometry.coordinates, b.geometry.coordinates, {
         resampleM: 20,
         distMaxM: DETECT_DIST_MAX_M,
@@ -427,487 +478,645 @@ export function applySharedCorridorSeparationStage({
       for (const ext of exts) pairs.push({ a, b, ext });
     }
   }
-  // Longest shared stretch first, same convention as cross-color-spread v2.
   pairs.sort((p, q) => q.ext.sharedLenM - p.ext.sharedLenM);
+  return { candidates, junctionPoints, pairs };
+}
 
-  // Claimed ranges are tracked in each FULL feature's own arc frame so windows
-  // from different pockets/pairs never re-offset an already-fixed stretch.
-  const claimedRanges = new Map<LineFeature, [number, number][]>();
-  const rangeBlocked = (feature: LineFeature, s: number, e: number): boolean => {
-    const ranges = claimedRanges.get(feature);
-    if (!ranges) return false;
-    return ranges.some(([rs, re]) => !(e + TAPER_M < rs || s - TAPER_M > re));
+function balancedWindowOptions(windowSegmentLenM: number, forcedASign?: number): BalancedOptions {
+  const coreFractionMargin = Math.min(0.25, (2 * TAPER_M) / Math.max(1, windowSegmentLenM));
+  const options: BalancedOptions = {
+    bbox: { minLon: -180, maxLon: 180, minLat: -90, maxLat: 90 },
+    marginM: 0,
+    targetSeparationM: FLOOR_SEPARATION_M,
+    blendM: TAPER_M,
+    sampleM: SAMPLE_M,
+    smoothingPasses: SMOOTHING_PASSES,
+    blendFromCore: false,
+    coreStartFraction: coreFractionMargin,
+    coreEndFraction: 1 - coreFractionMargin,
   };
-  const claimRange = (feature: LineFeature, s: number, e: number): void => {
-    if (!claimedRanges.has(feature)) claimedRanges.set(feature, []);
-    claimedRanges.get(feature)!.push([s, e]);
+  if (forcedASign !== undefined) options.forcedASign = forcedASign;
+  return options;
+}
+
+function fitOneWindow(
+  aSegFull: Position[],
+  bSegFull: Position[],
+  ext: SharedArcExtent,
+  reversed: boolean,
+  bLen: number,
+  wStart: number,
+  wEnd: number,
+  coreStart: number,
+  coreEnd: number,
+  junctionPoints: Position[],
+  claimed: ClaimedRanges,
+  a: SeparationCandidate,
+  b: SeparationCandidate,
+  outcome: FixOutcome,
+): WindowFit | null {
+  const aWin = sliceArc(aSegFull, wStart, wEnd);
+  const bWin = sliceArc(bSegFull, wStart, wEnd);
+  if (aWin.length < 2 || bWin.length < 2) {
+    outcome.skipped_reasons.push("degenerate_window");
+    return null;
+  }
+  if (
+    aWin.some((p) => nearAnyJunctionPoint(p, junctionPoints, JUNCTION_EXCLUSION_M)) ||
+    bWin.some((p) => nearAnyJunctionPoint(p, junctionPoints, JUNCTION_EXCLUSION_M))
+  ) {
+    outcome.skipped_reasons.push("near_junction_or_branch_transition");
+    return null;
+  }
+  const aFullStart = ext.aStartArc + wStart;
+  const aFullEnd = ext.aStartArc + wEnd;
+  const bFullStart = reversed ? ext.bStartArc + (bLen - wEnd) : ext.bStartArc + wStart;
+  const bFullEnd = reversed ? ext.bStartArc + (bLen - wStart) : ext.bStartArc + wEnd;
+  if (
+    rangeBlocked(claimed, a, aFullStart, aFullEnd) ||
+    rangeBlocked(claimed, b, Math.min(bFullStart, bFullEnd), Math.max(bFullStart, bFullEnd))
+  ) {
+    outcome.skipped_reasons.push("range_already_claimed");
+    return null;
+  }
+  const balanced = buildBalancedPair(aWin, bWin, balancedWindowOptions(Math.max(lengthM(aWin), lengthM(bWin))));
+  if (
+    !Number.isFinite(balanced.coreMinAfterM) ||
+    balanced.coreMinAfterM < FLOOR_SEPARATION_M - VERIFY_TOLERANCE_M
+  ) {
+    outcome.skipped_reasons.push("fit_verification_failed");
+    return null;
+  }
+  return {
+    yellow: balanced.yellow,
+    orange: balanced.orange,
+    aSign: balanced.aSign,
+    wStart,
+    wEnd,
+    coreStart,
+    coreEnd,
   };
+}
 
-  const outcomes: FixOutcome[] = [];
-  let windowsFixed = 0;
-  let pairsWithAFix = 0;
-  // Shared-extent endpoints of each pair that actually received a fix. The
-  // taper legitimately converges back to the original (possibly overlapping)
-  // geometry at THAT PAIR's corridor ends; hotspot checks exclude only those
-  // per-pair points, never another pair's boundaries.
-  const pairTransitions = new Map<(typeof pairs)[number], Position[]>();
-
-  for (const pair of pairs) {
-    const { a, b, ext } = pair;
-    if (rangeBlocked(a, ext.aStartArc, ext.aEndArc)) continue;
-    if (rangeBlocked(b, ext.bStartArc, ext.bEndArc)) continue;
-
-    const aSegFull = sliceArc(a.geometry.coordinates, ext.aStartArc, ext.aEndArc);
-    const bSegFullRaw = sliceArc(b.geometry.coordinates, ext.bStartArc, ext.bEndArc);
-    if (aSegFull.length < 2 || bSegFullRaw.length < 2) continue;
-    const reversed = orientationNeedsReverse(aSegFull, bSegFullRaw);
-    const bSegFull = reversed ? bSegFullRaw.slice().reverse() : bSegFullRaw;
-
-    const aLen = lengthM(aSegFull);
-    const bLen = lengthM(bSegFull);
-    const { seps, count } = pointwiseSeparation(aSegFull, bSegFull, SCAN_SAMPLE_M);
-    const minBeforeM = Math.min(...seps);
-
-    const outcome: FixOutcome = {
-      a_id: featureLabel(a),
-      b_id: featureLabel(b),
-      a_color: String(a.properties.color),
-      b_color: String(b.properties.color),
-      shared_len_m: Number(ext.sharedLenM.toFixed(1)),
-      min_before_m: Number(minBeforeM.toFixed(2)),
-      min_after_m: Number(minBeforeM.toFixed(2)),
-      windows_attempted: 0,
-      windows_applied: 0,
-      skipped_reasons: [],
-    };
-
-    const pockets = deficientArcPockets(seps, count, aLen, FLOOR_SEPARATION_M);
-    if (pockets.length === 0) {
-      outcomes.push(outcome);
+function contiguousWindowRuns(winResults: Array<WindowFit | null>) {
+  const found: { start: number; end: number }[] = [];
+  let ri = 0;
+  while (ri < winResults.length) {
+    if (winResults[ri] === null) {
+      ri += 1;
       continue;
     }
+    let runEnd = ri;
+    while (runEnd < winResults.length && winResults[runEnd] !== null) runEnd += 1;
+    found.push({ start: ri, end: runEnd });
+    ri = runEnd;
+  }
+  return found;
+}
 
-    let anyApplied = false;
+function refitWindowToSign(
+  fitted: WindowFit,
+  aSegFull: Position[],
+  bSegFull: Position[],
+  dominantSign: number,
+  outcome: FixOutcome,
+): boolean {
+  const aWin = sliceArc(aSegFull, fitted.wStart, fitted.wEnd);
+  const bWin = sliceArc(bSegFull, fitted.wStart, fitted.wEnd);
+  const refit = buildBalancedPair(
+    aWin,
+    bWin,
+    balancedWindowOptions(Math.max(lengthM(aWin), lengthM(bWin)), dominantSign),
+  );
+  if (
+    !Number.isFinite(refit.coreMinAfterM) ||
+    refit.coreMinAfterM < FLOOR_SEPARATION_M - VERIFY_TOLERANCE_M
+  ) {
+    outcome.skipped_reasons.push("sign_refit_verification_failed");
+    return false;
+  }
+  fitted.yellow = refit.yellow;
+  fitted.orange = refit.orange;
+  fitted.aSign = dominantSign;
+  return true;
+}
 
-    // Geometry mutations are queued here during the pocket loop and applied
-    // together afterwards -- see the application block below for why.
-    const pendingReplacements: { feature: SeparationCandidate; start: number; end: number; coords: Position[] }[] = [];
+type NormalizedRuns = {
+  runs: { start: number; end: number }[];
+  windowsFixedDelta: number;
+};
 
-    // Snapshot both features so the whole pair can be rolled back if the
-    // post-fix measurement comes out worse than before (never-degrade guard).
-    // Taken after earlier pairs already ran, so a rollback undoes only THIS
-    // pair's changes. replaceArcRange builds new arrays, so these references
-    // stay pristine.
-    const aCoordsBefore = a.geometry.coordinates;
-    const bCoordsBefore = b.geometry.coordinates;
-    const aPropsBefore = { ...a.properties };
-    const bPropsBefore = { ...b.properties };
-    const aClaimCountBefore = claimedRanges.get(a)?.length ?? 0;
-    const bClaimCountBefore = claimedRanges.get(b)?.length ?? 0;
-    const aTotalLenBefore = lengthM(a.geometry.coordinates);
-    const bTotalLenBefore = lengthM(b.geometry.coordinates);
+function normalizeRunSigns(
+  winResults: Array<WindowFit | null>,
+  aSegFull: Position[],
+  bSegFull: Position[],
+  outcome: FixOutcome,
+): NormalizedRuns {
+  let runs = contiguousWindowRuns(winResults);
+  let windowsFixedDelta = 0;
+  for (let guard = 0; guard < 3; guard += 1) {
+    let refitFailed = false;
+    for (const run of runs) {
+      let positiveCount = 0;
+      let negativeCount = 0;
+      for (let j = run.start; j < run.end; j += 1) {
+        const fitted = winResults[j];
+        if (!fitted) continue;
+        if (fitted.aSign > 0) positiveCount += 1;
+        else negativeCount += 1;
+      }
+      const dominantSign = positiveCount >= negativeCount ? 1 : -1;
+      for (let j = run.start; j < run.end; j += 1) {
+        const fitted = winResults[j];
+        if (!fitted || fitted.aSign === dominantSign) continue;
+        if (refitWindowToSign(fitted, aSegFull, bSegFull, dominantSign, outcome)) continue;
+        winResults[j] = null;
+        outcome.windows_applied -= 1;
+        windowsFixedDelta -= 1;
+        refitFailed = true;
+      }
+    }
+    if (!refitFailed) break;
+    runs = contiguousWindowRuns(winResults);
+  }
+  return { runs, windowsFixedDelta };
+}
 
-    // Every arc position below is in the pre-mutation frame; geometry is only
-    // mutated after ALL pockets are processed (see pendingReplacements), so
-    // iteration order here doesn't matter for correctness.
-    for (let pi = 0; pi < pockets.length; pi += 1) {
-      const [pStart, pEnd] = pockets[pi];
-      const pocketWindows = windowsForPocket(pStart, pEnd, aLen);
-      const pocketLen = pEnd - pStart;
-      const chunkCount = pocketWindows.length;
-      const chunkLen = pocketLen / chunkCount;
+type ArcKeepRange = {
+  keepStart: number;
+  keepEnd: number;
+};
 
-      // Phase 1: compute all balanced pairs from the ORIGINAL geometry.
-      // Each window's output is stored without touching a.geometry / b.geometry
-      // so subsequent windows still read correct arc positions.
-      type WinResult = {
-        yellow: Position[];
-        orange: Position[];
-        aSign: number;
-        wStart: number;
-        wEnd: number;
-        coreStart: number;
-        coreEnd: number;
-      };
-      const winResults: (WinResult | null)[] = [];
+function keepRangeForRunWindow(
+  fitted: WindowFit,
+  j: number,
+  runStart: number,
+  runEnd: number,
+): ArcKeepRange {
+  return {
+    keepStart: j === runStart ? 0 : fitted.coreStart - fitted.wStart,
+    keepEnd: j === runEnd - 1 ? lengthM(fitted.yellow) : fitted.coreEnd - fitted.wStart,
+  };
+}
 
-      for (let wi = 0; wi < chunkCount; wi += 1) {
-        const [wStart, wEnd] = pocketWindows[wi];
-        const coreStart = pStart + wi * chunkLen;
-        const coreEnd = pStart + (wi + 1) * chunkLen;
-        outcome.windows_attempted += 1;
+function queueMergedRunReplacements(
+  runs: { start: number; end: number }[],
+  winResults: Array<WindowFit | null>,
+  pair: SharedPair,
+  reversed: boolean,
+  bLen: number,
+  pendingReplacements: PendingReplacement[],
+  claimed: ClaimedRanges,
+): boolean {
+  const { a, b, ext } = pair;
+  let anyApplied = false;
+  for (let rIdx = runs.length - 1; rIdx >= 0; rIdx -= 1) {
+    const { start: runStart, end: runEnd } = runs[rIdx];
+    const mergedYellow: Position[] = [];
+    const mergedOrange: Position[] = [];
+    let lastASign = 0;
+    for (let j = runStart; j < runEnd; j += 1) {
+      const fitted = winResults[j];
+      if (!fitted) continue;
+      const { keepStart, keepEnd } = keepRangeForRunWindow(fitted, j, runStart, runEnd);
+      if (keepEnd > keepStart) {
+        mergedYellow.push(...sliceArc(fitted.yellow, keepStart, keepEnd));
+        mergedOrange.push(...sliceArc(fitted.orange, keepStart, keepEnd));
+      }
+      lastASign = fitted.aSign;
+    }
+    if (mergedYellow.length < 2 || mergedOrange.length < 2) continue;
+    const firstR = winResults[runStart];
+    const lastR = winResults[runEnd - 1];
+    if (!firstR || !lastR) continue;
+    const aFullStart = ext.aStartArc + firstR.wStart;
+    const aFullEnd = ext.aStartArc + lastR.wEnd;
+    pendingReplacements.push({ feature: a, start: aFullStart, end: aFullEnd, coords: mergedYellow });
+    const bReplStart = reversed ? bLen - lastR.wEnd : firstR.wStart;
+    const bReplEnd = reversed ? bLen - firstR.wStart : lastR.wEnd;
+    const bFullStart = ext.bStartArc + Math.min(bReplStart, bReplEnd);
+    const bFullEnd = ext.bStartArc + Math.max(bReplStart, bReplEnd);
+    pendingReplacements.push({
+      feature: b,
+      start: bFullStart,
+      end: bFullEnd,
+      coords: reversed ? mergedOrange.slice().reverse() : mergedOrange,
+    });
+    a.properties.shared_corridor_separation_enforced = true;
+    b.properties.shared_corridor_separation_enforced = true;
+    a.properties.lane_offset_baked = true;
+    b.properties.lane_offset_baked = true;
+    a.properties.lane_slot_semantic = lastASign * 0.5;
+    b.properties.lane_slot_semantic = -lastASign * 0.5;
+    claimRange(claimed, a, aFullStart, aFullEnd);
+    claimRange(claimed, b, bFullStart, bFullEnd);
+    anyApplied = true;
+  }
+  return anyApplied;
+}
 
-        const aWin = sliceArc(aSegFull, wStart, wEnd);
-        const bWin = sliceArc(bSegFull, wStart, wEnd);
-        if (aWin.length < 2 || bWin.length < 2) {
-          outcome.skipped_reasons.push("degenerate_window");
-          winResults.push(null);
-          continue;
-        }
+function applyQueuedReplacements(pendingReplacements: PendingReplacement[]) {
+  if (pendingReplacements.length === 0) return;
+  const byFeature = new Map<SeparationCandidate, PendingReplacement[]>();
+  for (const repl of pendingReplacements) {
+    const list = byFeature.get(repl.feature);
+    if (list) list.push(repl);
+    else byFeature.set(repl.feature, [repl]);
+  }
+  byFeature.forEach((repls, feature) => {
+    repls.sort((x, y) => y.start - x.start);
+    let coords = feature.geometry.coordinates;
+    for (const repl of repls) {
+      coords = replaceArcRange(coords, repl.start, repl.end, repl.coords);
+    }
+    feature.geometry = { type: "LineString", coordinates: coords };
+  });
+}
 
-        if (
-          aWin.some((p) => nearAnyJunctionPoint(p, junctionPoints, JUNCTION_EXCLUSION_M)) ||
-          bWin.some((p) => nearAnyJunctionPoint(p, junctionPoints, JUNCTION_EXCLUSION_M))
-        ) {
-          outcome.skipped_reasons.push("near_junction_or_branch_transition");
-          winResults.push(null);
-          continue;
-        }
+function rollbackPairGeometry(
+  a: SeparationCandidate,
+  b: SeparationCandidate,
+  aCoordsBefore: Position[],
+  bCoordsBefore: Position[],
+  aPropsBefore: LineFeature["properties"],
+  bPropsBefore: LineFeature["properties"],
+  claimed: ClaimedRanges,
+  aClaimCountBefore: number,
+  bClaimCountBefore: number,
+) {
+  a.geometry = { type: "LineString", coordinates: aCoordsBefore };
+  b.geometry = { type: "LineString", coordinates: bCoordsBefore };
+  a.properties = aPropsBefore;
+  b.properties = bPropsBefore;
+  const aClaims = claimed.get(a);
+  const bClaims = claimed.get(b);
+  if (aClaims) aClaims.length = aClaimCountBefore;
+  if (bClaims) bClaims.length = bClaimCountBefore;
+}
 
-        const aFullStart = ext.aStartArc + wStart;
-        const aFullEnd = ext.aStartArc + wEnd;
-        const bFullStart = reversed ? ext.bStartArc + (bLen - wEnd) : ext.bStartArc + wStart;
-        const bFullEnd = reversed ? ext.bStartArc + (bLen - wStart) : ext.bStartArc + wEnd;
+type PocketProjection = {
+  anyApplied: boolean;
+  windowsFixedDelta: number;
+};
 
-        if (rangeBlocked(a, aFullStart, aFullEnd) || rangeBlocked(b, Math.min(bFullStart, bFullEnd), Math.max(bFullStart, bFullEnd))) {
-          outcome.skipped_reasons.push("range_already_claimed");
-          winResults.push(null);
-          continue;
-        }
-
-        const windowSegmentLenM = Math.max(lengthM(aWin), lengthM(bWin));
-        const coreFractionMargin = Math.min(0.25, (2 * TAPER_M) / Math.max(1, windowSegmentLenM));
-        const options: BalancedOptions = {
-          bbox: { minLon: -180, maxLon: 180, minLat: -90, maxLat: 90 },
-          marginM: 0,
-          targetSeparationM: FLOOR_SEPARATION_M,
-          blendM: TAPER_M,
-          sampleM: SAMPLE_M,
-          smoothingPasses: SMOOTHING_PASSES,
-          blendFromCore: false,
-          coreStartFraction: coreFractionMargin,
-          coreEndFraction: 1 - coreFractionMargin,
-        };
-        const balanced = buildBalancedPair(aWin, bWin, options);
-
-        if (
-          !Number.isFinite(balanced.coreMinAfterM) ||
-          balanced.coreMinAfterM < FLOOR_SEPARATION_M - VERIFY_TOLERANCE_M
-        ) {
-          outcome.skipped_reasons.push("fit_verification_failed");
-          winResults.push(null);
-          continue;
-        }
-
-        winResults.push({
-          yellow: balanced.yellow,
-          orange: balanced.orange,
-          aSign: balanced.aSign,
-          wStart, wEnd, coreStart, coreEnd,
-        });
+function projectPairPockets(
+  pair: SharedPair,
+  aSegFull: Position[],
+  bSegFull: Position[],
+  reversed: boolean,
+  bLen: number,
+  aLen: number,
+  pockets: [number, number][],
+  junctionPoints: Position[],
+  claimed: ClaimedRanges,
+  outcome: FixOutcome,
+): PocketProjection {
+  const pendingReplacements: PendingReplacement[] = [];
+  let anyApplied = false;
+  let windowsFixedDelta = 0;
+  for (const [pStart, pEnd] of pockets) {
+    const pocketWindows = windowsForPocket(pStart, pEnd, aLen);
+    const pocketLen = pEnd - pStart;
+    const chunkCount = pocketWindows.length;
+    const chunkLen = pocketLen / chunkCount;
+    const winResults: Array<WindowFit | null> = [];
+    for (let wi = 0; wi < chunkCount; wi += 1) {
+      const [wStart, wEnd] = pocketWindows[wi];
+      outcome.windows_attempted += 1;
+      const fitted = fitOneWindow(
+        aSegFull,
+        bSegFull,
+        pair.ext,
+        reversed,
+        bLen,
+        wStart,
+        wEnd,
+        pStart + wi * chunkLen,
+        pStart + (wi + 1) * chunkLen,
+        junctionPoints,
+        claimed,
+        pair.a,
+        pair.b,
+        outcome,
+      );
+      winResults.push(fitted);
+      if (fitted) {
         outcome.windows_applied += 1;
-        windowsFixed += 1;
-      }
-
-      // Phase 2: merge contiguous successful windows into single replacements.
-      // For each contiguous run, take only the CORE portion of interior windows
-      // (no buffer overlap) and include the exterior buffer/taper only on the
-      // first and last windows. This avoids stale-arc-position corruption from
-      // sequential overlapping replaceArcRange calls and prevents later windows'
-      // tapers from overwriting earlier fixes.
-      const computeRuns = (): { start: number; end: number }[] => {
-        const found: { start: number; end: number }[] = [];
-        let ri = 0;
-        while (ri < winResults.length) {
-          if (winResults[ri] === null) { ri++; continue; }
-          let runEnd = ri;
-          while (runEnd < winResults.length && winResults[runEnd] !== null) runEnd++;
-          found.push({ start: ri, end: runEnd });
-          ri = runEnd;
-        }
-        return found;
-      };
-      let runs = computeRuns();
-
-      // Normalize aSign across each run: with near-superimposed inputs,
-      // buildBalancedPair's side detection is floating-point noise and can
-      // flip between adjacent windows, making the two lines cross at window
-      // boundaries. Minority-sign windows are RE-FIT with the majority side
-      // forced (forcedASign) rather than having their output arrays swapped --
-      // at a run's first/last window the taper blends back to each feature's
-      // OWN original points, so swapping arrays there would splice b's real
-      // geometry into a and vice versa.
-      for (let guard = 0; guard < 3; guard += 1) {
-        let refitFailed = false;
-        for (const run of runs) {
-          let positiveCount = 0;
-          let negativeCount = 0;
-          for (let j = run.start; j < run.end; j += 1) {
-            const r = winResults[j]!;
-            if (r.aSign > 0) positiveCount++;
-            else negativeCount++;
-          }
-          const dominantSign = positiveCount >= negativeCount ? 1 : -1;
-          for (let j = run.start; j < run.end; j += 1) {
-            const r = winResults[j]!;
-            if (r.aSign === dominantSign) continue;
-            const aWin = sliceArc(aSegFull, r.wStart, r.wEnd);
-            const bWin = sliceArc(bSegFull, r.wStart, r.wEnd);
-            const windowSegmentLenM = Math.max(lengthM(aWin), lengthM(bWin));
-            const coreFractionMargin = Math.min(0.25, (2 * TAPER_M) / Math.max(1, windowSegmentLenM));
-            const refit = buildBalancedPair(aWin, bWin, {
-              bbox: { minLon: -180, maxLon: 180, minLat: -90, maxLat: 90 },
-              marginM: 0,
-              targetSeparationM: FLOOR_SEPARATION_M,
-              blendM: TAPER_M,
-              sampleM: SAMPLE_M,
-              smoothingPasses: SMOOTHING_PASSES,
-              blendFromCore: false,
-              coreStartFraction: coreFractionMargin,
-              coreEndFraction: 1 - coreFractionMargin,
-              forcedASign: dominantSign,
-            });
-            if (
-              !Number.isFinite(refit.coreMinAfterM) ||
-              refit.coreMinAfterM < FLOOR_SEPARATION_M - VERIFY_TOLERANCE_M
-            ) {
-              winResults[j] = null;
-              outcome.windows_applied -= 1;
-              windowsFixed -= 1;
-              outcome.skipped_reasons.push("sign_refit_verification_failed");
-              refitFailed = true;
-              continue;
-            }
-            r.yellow = refit.yellow;
-            r.orange = refit.orange;
-            r.aSign = dominantSign;
-          }
-        }
-        if (!refitFailed) break;
-        // A nulled window may have split a run; recompute and re-check
-        // majorities before trusting the batch.
-        runs = computeRuns();
-      }
-
-      for (let rIdx = runs.length - 1; rIdx >= 0; rIdx -= 1) {
-        const { start: runStart, end: runEnd } = runs[rIdx];
-        const mergedYellow: Position[] = [];
-        const mergedOrange: Position[] = [];
-        let lastASign = 0;
-
-        for (let j = runStart; j < runEnd; j += 1) {
-          const r = winResults[j]!;
-          const yellowLen = lengthM(r.yellow);
-
-          let keepStart: number;
-          let keepEnd: number;
-          if (j === runStart) {
-            keepStart = 0;
-          } else {
-            keepStart = r.coreStart - r.wStart;
-          }
-          if (j === runEnd - 1) {
-            keepEnd = yellowLen;
-          } else {
-            keepEnd = r.coreEnd - r.wStart;
-          }
-
-          if (keepEnd > keepStart) {
-            mergedYellow.push(...sliceArc(r.yellow, keepStart, keepEnd));
-            mergedOrange.push(...sliceArc(r.orange, keepStart, keepEnd));
-          }
-          lastASign = r.aSign;
-        }
-
-        if (mergedYellow.length < 2 || mergedOrange.length < 2) continue;
-
-        const firstR = winResults[runStart]!;
-        const lastR = winResults[runEnd - 1]!;
-        const replStartSeg = firstR.wStart;
-        const replEndSeg = lastR.wEnd;
-
-        // DEFERRED: every arc position here is in the pre-mutation frame. For
-        // reversed pairs, descending-a order is ASCENDING-b order, so applying
-        // immediately would still corrupt b across pockets/runs. Instead all
-        // replacements are queued and applied per-feature in that feature's
-        // own descending arc order after the pocket loop.
-        const aFullStart = ext.aStartArc + replStartSeg;
-        const aFullEnd = ext.aStartArc + replEndSeg;
-        pendingReplacements.push({ feature: a, start: aFullStart, end: aFullEnd, coords: mergedYellow });
-
-        const bReplStart = reversed ? bLen - replEndSeg : replStartSeg;
-        const bReplEnd = reversed ? bLen - replStartSeg : replEndSeg;
-        const bFullStart = ext.bStartArc + Math.min(bReplStart, bReplEnd);
-        const bFullEnd = ext.bStartArc + Math.max(bReplStart, bReplEnd);
-        const bReplacement = reversed ? mergedOrange.slice().reverse() : mergedOrange;
-        pendingReplacements.push({ feature: b, start: bFullStart, end: bFullEnd, coords: bReplacement });
-
-        a.properties.shared_corridor_separation_enforced = true;
-        b.properties.shared_corridor_separation_enforced = true;
-        a.properties.lane_offset_baked = true;
-        b.properties.lane_offset_baked = true;
-        a.properties.lane_slot_semantic = lastASign * 0.5;
-        b.properties.lane_slot_semantic = -lastASign * 0.5;
-
-        claimRange(a, aFullStart, aFullEnd);
-        claimRange(b, bFullStart, bFullEnd);
-        anyApplied = true;
+        windowsFixedDelta += 1;
       }
     }
-
-    // Apply the queued replacements, per feature, in descending arc order so
-    // each application leaves every not-yet-applied (leftward) range's arc
-    // positions valid. Ranges never overlap: distinct pockets sit >=
-    // MERGE_GAP_M apart and runs within a pocket are separated by at least
-    // one skipped window.
-    if (pendingReplacements.length > 0) {
-      const byFeature = new Map<SeparationCandidate, typeof pendingReplacements>();
-      for (const repl of pendingReplacements) {
-        const list = byFeature.get(repl.feature);
-        if (list) list.push(repl);
-        else byFeature.set(repl.feature, [repl]);
-      }
-      byFeature.forEach((repls, feature) => {
-        repls.sort((x, y) => y.start - x.start);
-        let coords = feature.geometry.coordinates;
-        for (const repl of repls) {
-          coords = replaceArcRange(coords, repl.start, repl.end, repl.coords);
-        }
-        feature.geometry = { type: "LineString", coordinates: coords };
-      });
+    const normalized = normalizeRunSigns(winResults, aSegFull, bSegFull, outcome);
+    windowsFixedDelta += normalized.windowsFixedDelta;
+    if (
+      queueMergedRunReplacements(
+        normalized.runs,
+        winResults,
+        pair,
+        reversed,
+        bLen,
+        pendingReplacements,
+        claimed,
+      )
+    ) {
+      anyApplied = true;
     }
-
-    if (anyApplied) {
-      // Re-measure the WHOLE extent post-fix rather than trust the per-window
-      // numbers -- a neighboring untouched stretch could still be the worst.
-      // The replacements changed total arc length, so shift the extent's end
-      // by the accumulated delta before re-slicing (every edit lies inside
-      // the extent, so its start arc is unaffected).
-      const aDelta = lengthM(a.geometry.coordinates) - aTotalLenBefore;
-      const bDelta = lengthM(b.geometry.coordinates) - bTotalLenBefore;
-      const aSegFullAfter = sliceArc(a.geometry.coordinates, ext.aStartArc, ext.aEndArc + aDelta);
-      const bSegFullAfterRaw = sliceArc(b.geometry.coordinates, ext.bStartArc, ext.bEndArc + bDelta);
-      const bSegFullAfter = orientationNeedsReverse(aSegFullAfter, bSegFullAfterRaw)
-        ? bSegFullAfterRaw.slice().reverse()
-        : bSegFullAfterRaw;
-
-      // Never-degrade guard: measured nearest-neighbor (what a viewer sees,
-      // not index-paired), the pair must not end up closer anywhere than it
-      // started. If it did, undo everything this pair changed.
-      const beforeNN = minNearestSeparationM(aSegFull, bSegFull, SCAN_SAMPLE_M);
-      const afterNN = minNearestSeparationM(aSegFullAfter, bSegFullAfter, SCAN_SAMPLE_M);
-      if (afterNN < beforeNN - ROLLBACK_TOLERANCE_M) {
-        a.geometry = { type: "LineString", coordinates: aCoordsBefore };
-        b.geometry = { type: "LineString", coordinates: bCoordsBefore };
-        a.properties = aPropsBefore;
-        b.properties = bPropsBefore;
-        const aRanges = claimedRanges.get(a);
-        if (aRanges) aRanges.length = aClaimCountBefore;
-        const bRanges = claimedRanges.get(b);
-        if (bRanges) bRanges.length = bClaimCountBefore;
-        windowsFixed -= outcome.windows_applied;
-        outcome.windows_applied = 0;
-        outcome.skipped_reasons.push(
-          `rolled_back_degraded_separation(${beforeNN.toFixed(2)}m->${afterNN.toFixed(2)}m)`,
-        );
-        anyApplied = false;
-      } else {
-        pairsWithAFix += 1;
-        pairTransitions.set(pair, [
-          aSegFull[0],
-          aSegFull[aSegFull.length - 1],
-          bSegFullRaw[0],
-          bSegFullRaw[bSegFullRaw.length - 1],
-        ]);
-        if (aSegFullAfter.length >= 2 && bSegFullAfter.length >= 2) {
-          const after = pointwiseSeparation(aSegFullAfter, bSegFullAfter, SCAN_SAMPLE_M);
-          outcome.min_after_m = Number(Math.min(...after.seps).toFixed(2));
-        }
-      }
-    }
-
-    outcomes.push(outcome);
   }
+  applyQueuedReplacements(pendingReplacements);
+  return { anyApplied, windowsFixedDelta };
+}
 
-  // ----- Hotspot assertions (checks, not geometry patches) -----
-  const hotspots: HotspotResult[] = [];
+type RollbackDecision = {
+  kept: boolean;
+  transitions: Position[];
+};
 
-  // B/Q Brighton corridor near Newkirk Plaza must hold >=8m separation.
-  {
-    const NEWKIRK_LAT_MIN = 40.630;
-    const NEWKIRK_LAT_MAX = 40.638;
-    const NEWKIRK_FLOOR_M = 8;
-    const bqFeatures = candidates.filter((f) => {
-      const routeIds = (f.properties.route_ids as string[] | undefined) ?? [];
-      return routeIds.includes("B") || routeIds.includes("Q");
-    });
-    let worstNewkirk = Infinity;
-    for (let i = 0; i < bqFeatures.length; i += 1) {
-      for (let j = i + 1; j < bqFeatures.length; j += 1) {
-        const a = bqFeatures[i];
-        const b = bqFeatures[j];
-        if (String(a.properties.color).toUpperCase() === String(b.properties.color).toUpperCase()) continue;
-        for (const p of a.geometry.coordinates) {
-          if (p[1] < NEWKIRK_LAT_MIN || p[1] > NEWKIRK_LAT_MAX) continue;
-          let best = Infinity;
-          for (const q of b.geometry.coordinates) {
-            if (q[1] < NEWKIRK_LAT_MIN - 0.002 || q[1] > NEWKIRK_LAT_MAX + 0.002) continue;
-            best = Math.min(best, haversineM(p, q));
+function remeasureOrRollback(
+  pair: SharedPair,
+  aSegFull: Position[],
+  bSegFull: Position[],
+  bSegFullRaw: Position[],
+  aCoordsBefore: Position[],
+  bCoordsBefore: Position[],
+  aPropsBefore: LineFeature["properties"],
+  bPropsBefore: LineFeature["properties"],
+  aTotalLenBefore: number,
+  bTotalLenBefore: number,
+  claimed: ClaimedRanges,
+  aClaimCountBefore: number,
+  bClaimCountBefore: number,
+  outcome: FixOutcome,
+): RollbackDecision {
+  const { a, b, ext } = pair;
+  const aDelta = lengthM(a.geometry.coordinates) - aTotalLenBefore;
+  const bDelta = lengthM(b.geometry.coordinates) - bTotalLenBefore;
+  const aSegFullAfter = sliceArc(a.geometry.coordinates, ext.aStartArc, ext.aEndArc + aDelta);
+  const bSegFullAfterRaw = sliceArc(b.geometry.coordinates, ext.bStartArc, ext.bEndArc + bDelta);
+  const bSegFullAfter = orientationNeedsReverse(aSegFullAfter, bSegFullAfterRaw)
+    ? bSegFullAfterRaw.slice().reverse()
+    : bSegFullAfterRaw;
+  const beforeNN = minNearestSeparationM(aSegFull, bSegFull, SCAN_SAMPLE_M);
+  const afterNN = minNearestSeparationM(aSegFullAfter, bSegFullAfter, SCAN_SAMPLE_M);
+  if (afterNN < beforeNN - ROLLBACK_TOLERANCE_M) {
+    rollbackPairGeometry(
+      a,
+      b,
+      aCoordsBefore,
+      bCoordsBefore,
+      aPropsBefore,
+      bPropsBefore,
+      claimed,
+      aClaimCountBefore,
+      bClaimCountBefore,
+    );
+    outcome.skipped_reasons.push(
+      `rolled_back_degraded_separation(${beforeNN.toFixed(2)}m->${afterNN.toFixed(2)}m)`,
+    );
+    return { kept: false, transitions: [] };
+  }
+  if (aSegFullAfter.length >= 2 && bSegFullAfter.length >= 2) {
+    const after = pointwiseSeparation(aSegFullAfter, bSegFullAfter, SCAN_SAMPLE_M);
+    outcome.min_after_m = Number(Math.min(...after.seps).toFixed(2));
+  }
+  return {
+    kept: true,
+    transitions: [
+      aSegFull[0],
+      aSegFull[aSegFull.length - 1],
+      bSegFullRaw[0],
+      bSegFullRaw[bSegFullRaw.length - 1],
+    ],
+  };
+}
+
+function projectOneSharedPair(
+  pair: SharedPair,
+  junctionPoints: Position[],
+  claimed: ClaimedRanges,
+): {
+  outcome: FixOutcome;
+  windowsFixedDelta: number;
+  pairFixed: boolean;
+  transitions: Position[];
+} | null {
+  const { a, b, ext } = pair;
+  if (
+    rangeBlocked(claimed, a, ext.aStartArc, ext.aEndArc) ||
+    rangeBlocked(claimed, b, ext.bStartArc, ext.bEndArc)
+  ) {
+    return null;
+  }
+  const aSegFull = sliceArc(a.geometry.coordinates, ext.aStartArc, ext.aEndArc);
+  const bSegFullRaw = sliceArc(b.geometry.coordinates, ext.bStartArc, ext.bEndArc);
+  if (aSegFull.length < 2 || bSegFullRaw.length < 2) {
+    return null;
+  }
+  const reversed = orientationNeedsReverse(aSegFull, bSegFullRaw);
+  const bSegFull = reversed ? bSegFullRaw.slice().reverse() : bSegFullRaw;
+  const aLen = lengthM(aSegFull);
+  const bLen = lengthM(bSegFull);
+  const { seps, count } = pointwiseSeparation(aSegFull, bSegFull, SCAN_SAMPLE_M);
+  const minBeforeM = Math.min(...seps);
+  const outcome: FixOutcome = {
+    a_id: featureLabel(pair.a),
+    b_id: featureLabel(pair.b),
+    a_color: String(pair.a.properties.color),
+    b_color: String(pair.b.properties.color),
+    shared_len_m: Number(pair.ext.sharedLenM.toFixed(1)),
+    min_before_m: Number(minBeforeM.toFixed(2)),
+    min_after_m: Number(minBeforeM.toFixed(2)),
+    windows_attempted: 0,
+    windows_applied: 0,
+    skipped_reasons: [],
+  };
+  const pockets = deficientArcPockets(seps, count, aLen, FLOOR_SEPARATION_M);
+  if (pockets.length === 0) {
+    return { outcome, windowsFixedDelta: 0, pairFixed: false, transitions: [] };
+  }
+  const aCoordsBefore = a.geometry.coordinates;
+  const bCoordsBefore = b.geometry.coordinates;
+  const aPropsBefore = { ...a.properties };
+  const bPropsBefore = { ...b.properties };
+  const aClaimsBefore = claimed.get(a);
+  const bClaimsBefore = claimed.get(b);
+  const aClaimCountBefore = aClaimsBefore ? aClaimsBefore.length : 0;
+  const bClaimCountBefore = bClaimsBefore ? bClaimsBefore.length : 0;
+  const aTotalLenBefore = lengthM(a.geometry.coordinates);
+  const bTotalLenBefore = lengthM(b.geometry.coordinates);
+  const projected = projectPairPockets(
+    pair,
+    aSegFull,
+    bSegFull,
+    reversed,
+    bLen,
+    aLen,
+    pockets,
+    junctionPoints,
+    claimed,
+    outcome,
+  );
+  if (!projected.anyApplied) {
+    return { outcome, windowsFixedDelta: projected.windowsFixedDelta, pairFixed: false, transitions: [] };
+  }
+  const measured = remeasureOrRollback(
+    pair,
+    aSegFull,
+    bSegFull,
+    bSegFullRaw,
+    aCoordsBefore,
+    bCoordsBefore,
+    aPropsBefore,
+    bPropsBefore,
+    aTotalLenBefore,
+    bTotalLenBefore,
+    claimed,
+    aClaimCountBefore,
+    bClaimCountBefore,
+    outcome,
+  );
+  if (!measured.kept) {
+    const applied = outcome.windows_applied;
+    outcome.windows_applied = 0;
+    return {
+      outcome,
+      windowsFixedDelta: projected.windowsFixedDelta - applied,
+      pairFixed: false,
+      transitions: [],
+    };
+  }
+  return {
+    outcome,
+    windowsFixedDelta: projected.windowsFixedDelta,
+    pairFixed: true,
+    transitions: measured.transitions,
+  };
+}
+
+function projectSharedCorridorFixes(pairs: SharedPair[], junctionPoints: Position[]) {
+  const claimed: ClaimedRanges = new Map();
+  const outcomes: FixOutcome[] = [];
+  const pairTransitions = new Map<SharedPair, Position[]>();
+  let windowsFixed = 0;
+  let pairsWithAFix = 0;
+  for (const pair of pairs) {
+    const result = projectOneSharedPair(pair, junctionPoints, claimed);
+    if (!result) continue;
+    windowsFixed += result.windowsFixedDelta;
+    if (result.pairFixed) {
+      pairsWithAFix += 1;
+      pairTransitions.set(pair, result.transitions);
+    }
+    outcomes.push(result.outcome);
+  }
+  return { outcomes, pairTransitions, windowsFixed, pairsWithAFix };
+}
+
+function measureNewkirkHotspot(candidates: SeparationCandidate[]): HotspotResult {
+  const NEWKIRK_LAT_MIN = 40.630;
+  const NEWKIRK_LAT_MAX = 40.638;
+  const NEWKIRK_FLOOR_M = 8;
+  const bqFeatures = candidates.filter((f) => {
+    const ids = routeIdsOf(f.properties);
+    return ids.includes("B") || ids.includes("Q");
+  });
+  let worstNewkirk = Infinity;
+  for (let i = 0; i < bqFeatures.length; i += 1) {
+    for (let j = i + 1; j < bqFeatures.length; j += 1) {
+      const a = bqFeatures[i];
+      const b = bqFeatures[j];
+      if (String(a.properties.color).toUpperCase() === String(b.properties.color).toUpperCase()) {
+        continue;
+      }
+      for (const point of a.geometry.coordinates) {
+        if (point[1] < NEWKIRK_LAT_MIN || point[1] > NEWKIRK_LAT_MAX) continue;
+        for (const other of b.geometry.coordinates) {
+          if (other[1] < NEWKIRK_LAT_MIN - 0.002 || other[1] > NEWKIRK_LAT_MAX + 0.002) {
+            continue;
           }
-          if (best < worstNewkirk) worstNewkirk = best;
+          worstNewkirk = Math.min(worstNewkirk, haversineM(point, other));
         }
       }
     }
-    const passed = !Number.isFinite(worstNewkirk) || worstNewkirk >= NEWKIRK_FLOOR_M;
-    hotspots.push({
-      name: "bq_newkirk_plaza_separation",
-      passed,
-      detail: Number.isFinite(worstNewkirk)
-        ? `worst B/Q separation near Newkirk Plaza (lat ${NEWKIRK_LAT_MIN}-${NEWKIRK_LAT_MAX}): ${worstNewkirk.toFixed(2)}m (floor ${NEWKIRK_FLOOR_M}m)`
-        : "no B/Q vertices found in Newkirk Plaza lat band",
-    });
   }
+  const passed = !Number.isFinite(worstNewkirk) || worstNewkirk >= NEWKIRK_FLOOR_M;
+  return {
+    name: "bq_newkirk_plaza_separation",
+    passed,
+    detail: Number.isFinite(worstNewkirk)
+      ? `worst B/Q separation near Newkirk Plaza (lat ${NEWKIRK_LAT_MIN}-${NEWKIRK_LAT_MAX}): ${worstNewkirk.toFixed(2)}m (floor ${NEWKIRK_FLOOR_M}m)`
+      : "no B/Q vertices found in Newkirk Plaza lat band",
+  };
+}
 
-  // Flatbush/Atlantic cross-color group: no near-total overlap away from the
-  // junction itself (a real interchange legitimately touches ~0m AT the
-  // junction point -- that's not the bug being guarded against here, so
-  // points within JUNCTION_EXCLUSION_M of a collected junction point are
-  // excluded from this check, same as the fix pass above).
-  {
-    const FLATBUSH_ATLANTIC_LAT_MIN = 40.683;
-    const FLATBUSH_ATLANTIC_LAT_MAX = 40.692;
-    const FLATBUSH_ATLANTIC_LON_MIN = -73.985;
-    const FLATBUSH_ATLANTIC_LON_MAX = -73.974;
-    const NEAR_TOTAL_OVERLAP_M = 1.0;
-    const inZone = (p: Position) =>
-      p[1] >= FLATBUSH_ATLANTIC_LAT_MIN && p[1] <= FLATBUSH_ATLANTIC_LAT_MAX &&
-      p[0] >= FLATBUSH_ATLANTIC_LON_MIN && p[0] <= FLATBUSH_ATLANTIC_LON_MAX;
-    let worstFlatbush = Infinity;
-    let worstFlatbushWhere = "";
-    for (const pair of pairs) {
-      const { a, b } = pair;
-      if (!a.geometry.coordinates.some(inZone) && !b.geometry.coordinates.some(inZone)) continue;
-      // Only THIS pair's own shared-extent endpoints are excluded -- the taper
-      // legitimately converges back to original geometry there, and where the
-      // extent ends AT the features' shared origin (a Y-split like the D
-      // leaving the N/R at Pacific St) the two lines legitimately meet. Radius
-      // matches JUNCTION_EXCLUSION_M, the same berth the fix pass itself gives
-      // junction geometry. Another pair's boundary must not mask a defect in
-      // this one.
-      const transitions = pairTransitions.get(pair) ?? [];
-      const nearTransition = (p: Position) => transitions.some((t) => haversineM(p, t) <= JUNCTION_EXCLUSION_M);
-      for (const p of a.geometry.coordinates) {
-        if (!inZone(p)) continue;
-        if (nearAnyJunctionPoint(p, junctionPoints, JUNCTION_EXCLUSION_M)) continue;
-        if (nearTransition(p)) continue;
-        let best = Infinity;
-        for (const q of b.geometry.coordinates) best = Math.min(best, haversineM(p, q));
-        if (best < worstFlatbush) {
-          worstFlatbush = best;
-          worstFlatbushWhere = `${featureLabel(a)}(${a.properties.color}) vs ${featureLabel(b)}(${b.properties.color}) at [${p[0].toFixed(6)}, ${p[1].toFixed(6)}]`;
-        }
+type HotspotSeparation = {
+  worst: number;
+  where: string;
+};
+
+function worstFlatbushPairSeparation(
+  pairs: SharedPair[],
+  junctionPoints: Position[],
+  pairTransitions: Map<SharedPair, Position[]>,
+  inZone: (p: Position) => boolean,
+): HotspotSeparation {
+  let worst = Infinity;
+  let where = "";
+  for (const pair of pairs) {
+    const { a, b } = pair;
+    if (!a.geometry.coordinates.some(inZone) && !b.geometry.coordinates.some(inZone)) continue;
+    const transitions = pairTransitions.get(pair) ?? [];
+    for (const p of a.geometry.coordinates) {
+      if (!inZone(p)) continue;
+      if (nearAnyJunctionPoint(p, junctionPoints, JUNCTION_EXCLUSION_M)) continue;
+      if (transitions.some((transition) =>
+        haversineM(p, transition) <= JUNCTION_EXCLUSION_M,
+      )) {
+        continue;
+      }
+      let best = Infinity;
+      for (const point of b.geometry.coordinates) {
+        best = Math.min(best, haversineM(p, point));
+      }
+      if (best < worst) {
+        worst = best;
+        where = `${featureLabel(a)}(${a.properties.color}) vs ${featureLabel(b)}(${b.properties.color}) at [${p[0].toFixed(6)}, ${p[1].toFixed(6)}]`;
       }
     }
-    const passed = !Number.isFinite(worstFlatbush) || worstFlatbush >= NEAR_TOTAL_OVERLAP_M;
-    hotspots.push({
-      name: "flatbush_atlantic_no_near_total_overlap",
-      passed,
-      detail: Number.isFinite(worstFlatbush)
-        ? `worst cross-color separation in Flatbush/Atlantic zone (excluding junction points): ${worstFlatbush.toFixed(2)}m (floor ${NEAR_TOTAL_OVERLAP_M}m) -- ${worstFlatbushWhere}`
-        : "no cross-color pair found in Flatbush/Atlantic zone away from a junction",
-    });
   }
+  return { worst, where };
+}
 
+function measureFlatbushHotspot(
+  pairs: SharedPair[],
+  junctionPoints: Position[],
+  pairTransitions: Map<SharedPair, Position[]>,
+): HotspotResult {
+  const FLATBUSH_ATLANTIC_LAT_MIN = 40.683;
+  const FLATBUSH_ATLANTIC_LAT_MAX = 40.692;
+  const FLATBUSH_ATLANTIC_LON_MIN = -73.985;
+  const FLATBUSH_ATLANTIC_LON_MAX = -73.974;
+  const NEAR_TOTAL_OVERLAP_M = 1.0;
+  const inZone = (p: Position) =>
+    p[1] >= FLATBUSH_ATLANTIC_LAT_MIN && p[1] <= FLATBUSH_ATLANTIC_LAT_MAX &&
+    p[0] >= FLATBUSH_ATLANTIC_LON_MIN && p[0] <= FLATBUSH_ATLANTIC_LON_MAX;
+  const { worst, where } = worstFlatbushPairSeparation(pairs, junctionPoints, pairTransitions, inZone);
+  const passed = !Number.isFinite(worst) || worst >= NEAR_TOTAL_OVERLAP_M;
+  return {
+    name: "flatbush_atlantic_no_near_total_overlap",
+    passed,
+    detail: Number.isFinite(worst)
+      ? `worst cross-color separation in Flatbush/Atlantic zone (excluding junction points): ${worst.toFixed(2)}m (floor ${NEAR_TOTAL_OVERLAP_M}m) -- ${where}`
+      : "no cross-color pair found in Flatbush/Atlantic zone away from a junction",
+  };
+}
+
+function writeSeparationReport(
+  separationReportJsonPath: string,
+  pairsScanned: number,
+  pairsWithAFix: number,
+  windowsFixed: number,
+  hotspots: HotspotResult[],
+  outcomes: FixOutcome[],
+) {
   const report = {
     generated_at: new Date().toISOString(),
     source: "shared-corridor-separation-stage.ts",
@@ -923,7 +1132,7 @@ export function applySharedCorridorSeparationStage({
       junction_exclusion_m: JUNCTION_EXCLUSION_M,
     },
     summary: {
-      pairs_scanned: pairs.length,
+      pairs_scanned: pairsScanned,
       pairs_with_a_fix: pairsWithAFix,
       windows_fixed: windowsFixed,
     },
@@ -935,16 +1144,35 @@ export function applySharedCorridorSeparationStage({
     pairs: outcomes,
   };
   writeFileSync(separationReportJsonPath, `${JSON.stringify(report, null, 2)}\n`);
+}
 
-  console.log(`[visual-network] shared-corridor separation: pairs scanned=${pairs.length} pairs fixed=${pairsWithAFix} windows fixed=${windowsFixed}`);
+export function applySharedCorridorSeparationStage({
+  bundleArtifacts,
+  separationReportJsonPath,
+}: SharedCorridorSeparationStageInput): void {
+  const classified = classifySharedCorridorPairs(bundleArtifacts.visualFeatures);
+  const projected = projectSharedCorridorFixes(classified.pairs, classified.junctionPoints);
+  const hotspots = [
+    measureNewkirkHotspot(classified.candidates),
+    measureFlatbushHotspot(classified.pairs, classified.junctionPoints, projected.pairTransitions),
+  ];
+  writeSeparationReport(
+    separationReportJsonPath,
+    classified.pairs.length,
+    projected.pairsWithAFix,
+    projected.windowsFixed,
+    hotspots,
+    projected.outcomes,
+  );
+  console.log(`[visual-network] shared-corridor separation: pairs scanned=${classified.pairs.length} pairs fixed=${projected.pairsWithAFix} windows fixed=${projected.windowsFixed}`);
   console.log(`[visual-network] wrote ${separationReportJsonPath}`);
-  for (const h of hotspots) {
-    console.log(`[visual-network] shared-corridor hotspot ${h.name}: ${h.passed ? "PASS" : "FAIL"} -- ${h.detail}`);
+  for (const hotspot of hotspots) {
+    console.log(`[visual-network] shared-corridor hotspot ${hotspot.name}: ${hotspot.passed ? "PASS" : "FAIL"} -- ${hotspot.detail}`);
   }
-  const failedHotspots = hotspots.filter((h) => !h.passed);
+  const failedHotspots = hotspots.filter((hotspot) => !hotspot.passed);
   if (failedHotspots.length > 0) {
     console.error(
-      `[visual-network] *** shared-corridor separation hotspot check FAILED: ${failedHotspots.map((h) => h.name).join(", ")} ***`,
+      `[visual-network] *** shared-corridor separation hotspot check FAILED: ${failedHotspots.map((hotspot) => hotspot.name).join(", ")} ***`,
     );
     process.exit(1);
   }

@@ -1,0 +1,17 @@
+[cosmic-ray]
+module-path = "app/services/evidence.py"
+timeout = 30.0
+excluded-modules = []
+test-command = "python -m pytest -q -x tests/test_evidence_freshness.py"
+
+[cosmic-ray.distributor]
+name = "local"
+
+[cosmic-ray.filters.operators-filter]
+# ``|`` and keyword-only ``*`` are type/signature syntax in this module, not
+# runtime arithmetic. Keep the canary focused on behavior-changing mutations.
+exclude-operators = [
+  "core/ReplaceBinaryOperator_BitOr_.*",
+  "core/ReplaceBinaryOperator_Mul_.*",
+  "core/ReplaceBinaryOperator_Add_(?!Sub$).*",
+]

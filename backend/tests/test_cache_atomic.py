@@ -7,10 +7,25 @@ import time
 import unittest
 from unittest.mock import patch
 
+import pytest
 import redis
-
-from app.services.agent import candidate_store
 from app.services import cache
+from app.services.agent import candidate_store
+
+
+class _WatchConflict(redis.exceptions.WatchError):
+    def __init__(self) -> None:
+        super().__init__("candidate changed")
+
+
+class _SensitiveRedisError(redis.exceptions.ResponseError):
+    def __init__(self) -> None:
+        super().__init__("sensitive provider details")
+
+
+class _QuotaRedisError(redis.exceptions.ResponseError):
+    def __init__(self) -> None:
+        super().__init__("quota exceeded")
 
 
 class FakeRedis:
@@ -79,7 +94,7 @@ class _CandidatePipeline:
     def watch(self, _key):
         if self.client.watch_failures:
             self.client.watch_failures -= 1
-            raise redis.exceptions.WatchError("candidate changed")
+            raise _WatchConflict()
         if self.client.pipeline_error is not None:
             raise self.client.pipeline_error
 
@@ -110,10 +125,10 @@ class _CandidateRedis(FakeRedis):
 
 class _RejectingRedis:
     def get(self, _key):
-        raise redis.exceptions.ResponseError("sensitive provider details")
+        raise _SensitiveRedisError()
 
     def setex(self, _key, _ttl, _value):
-        raise redis.exceptions.ResponseError("sensitive provider details")
+        raise _SensitiveRedisError()
 
 
 class _WriteFailsReadMissRedis:
@@ -124,7 +139,7 @@ class _WriteFailsReadMissRedis:
         return [None for _key in keys]
 
     def setex(self, _key, _ttl, _value):
-        raise redis.exceptions.ResponseError("quota exceeded")
+        raise _QuotaRedisError()
 
 
 class OptionalProviderCacheTests(unittest.TestCase):
@@ -138,24 +153,21 @@ class OptionalProviderCacheTests(unittest.TestCase):
     def test_fail_open_cache_uses_process_memory_when_redis_rejects_requests(self):
         with patch.object(cache, "redis_client", _RejectingRedis()):
             cache.cache_set("mta:test", b"feed", 30, fail_open=True)
-            self.assertEqual(cache.cache_get("mta:test", fail_open=True), b"feed")
+            assert cache.cache_get("mta:test", fail_open=True) == b"feed"
 
     def test_default_cache_behavior_remains_strict(self):
         with patch.object(cache, "redis_client", _RejectingRedis()):
-            with self.assertRaises(redis.exceptions.ResponseError):
+            with pytest.raises(redis.exceptions.ResponseError):
                 cache.cache_get("session:test")
-            with self.assertRaises(redis.exceptions.ResponseError):
+            with pytest.raises(redis.exceptions.ResponseError):
                 cache.cache_set("session:test", b"state", 30)
 
     def test_fail_open_single_read_uses_mirror_after_write_failure_and_redis_miss(self):
         with patch.object(cache, "redis_client", _WriteFailsReadMissRedis()):
             cache.cache_set("optional:test", "value", 30, fail_open=True)
 
-            self.assertEqual(
-                cache.cache_get("optional:test", fail_open=True),
-                "value",
-            )
-            self.assertIsNone(cache.cache_get("optional:test"))
+            assert cache.cache_get("optional:test", fail_open=True) == "value"
+            assert cache.cache_get("optional:test") is None
 
     def test_fail_open_batch_read_uses_mirror_after_write_failure_and_redis_miss(self):
         with patch.object(cache, "redis_client", _WriteFailsReadMissRedis()):
@@ -164,8 +176,8 @@ class OptionalProviderCacheTests(unittest.TestCase):
             result = cache.cache_get_many(["optional:batch"], fail_open=True)
             strict_result = cache.cache_get_many(["optional:batch"])
 
-        self.assertEqual(result["optional:batch"], "value")
-        self.assertIsNone(strict_result["optional:batch"])
+        assert result["optional:batch"] == "value"
+        assert strict_result["optional:batch"] is None
 
 
 class CacheAddInMemoryTests(unittest.TestCase):
@@ -190,9 +202,9 @@ class CacheAddInMemoryTests(unittest.TestCase):
         for thread in threads:
             thread.join()
 
-        self.assertEqual(results.count(True), 1)
-        self.assertEqual(results.count(False), callers - 1)
-        self.assertIn(cache.cache_get("lock:single-winner"), [f"owner-{i}" for i in range(callers)])
+        assert results.count(True) == 1
+        assert results.count(False) == callers - 1
+        assert cache.cache_get("lock:single-winner") in [f"owner-{i}" for i in range(callers)]
 
     def test_expired_entry_can_be_reacquired(self):
         key = "lock:expired"
@@ -200,8 +212,8 @@ class CacheAddInMemoryTests(unittest.TestCase):
         _value, _expiry = cache._mem[key]
         cache._mem[key] = (_value, time.monotonic() - 1)
 
-        self.assertTrue(cache.cache_add(key, "fresh-owner", 60))
-        self.assertEqual(cache.cache_get(key), "fresh-owner")
+        assert cache.cache_add(key, "fresh-owner", 60)
+        assert cache.cache_get(key) == "fresh-owner"
 
 
 class CacheDeleteIfValueInMemoryTests(unittest.TestCase):
@@ -212,15 +224,15 @@ class CacheDeleteIfValueInMemoryTests(unittest.TestCase):
         key = "lock:owner"
         cache.cache_set(key, "owner-a", 60)
 
-        self.assertFalse(cache.cache_delete_if_value(key, "owner-b"))
-        self.assertEqual(cache.cache_get(key), "owner-a")
+        assert not cache.cache_delete_if_value(key, "owner-b")
+        assert cache.cache_get(key) == "owner-a"
 
     def test_right_owner_releases(self):
         key = "lock:owner"
         cache.cache_set(key, "owner-a", 60)
 
-        self.assertTrue(cache.cache_delete_if_value(key, "owner-a"))
-        self.assertIsNone(cache.cache_get(key))
+        assert cache.cache_delete_if_value(key, "owner-a")
+        assert cache.cache_get(key) is None
 
     def test_expired_entry_counts_as_absent(self):
         key = "lock:expired-delete"
@@ -228,14 +240,14 @@ class CacheDeleteIfValueInMemoryTests(unittest.TestCase):
         _value, _expiry = cache._mem[key]
         cache._mem[key] = (_value, time.monotonic() - 1)
 
-        self.assertFalse(cache.cache_delete_if_value(key, "owner-a"))
+        assert not cache.cache_delete_if_value(key, "owner-a")
 
     def test_string_owner_releases_bytes_value(self):
         key = "lock:bytes-owner"
         cache.cache_set(key, b"owner-a", 60)
 
-        self.assertTrue(cache.cache_delete_if_value(key, "owner-a"))
-        self.assertIsNone(cache.cache_get(key))
+        assert cache.cache_delete_if_value(key, "owner-a")
+        assert cache.cache_get(key) is None
 
 
 class CachePreserveTtlInMemoryTests(unittest.TestCase):
@@ -249,18 +261,18 @@ class CachePreserveTtlInMemoryTests(unittest.TestCase):
         _value, _expiry = cache._mem[key]
         cache._mem[key] = (_value, original_expiry)
 
-        self.assertTrue(cache.cache_set_preserve_ttl(key, "after"))
-        self.assertEqual(cache._mem[key], ("after", original_expiry))
+        assert cache.cache_set_preserve_ttl(key, "after")
+        assert cache._mem[key] == ("after", original_expiry)
 
     def test_missing_or_expired_key_is_not_created(self):
         key = "session:expired"
-        self.assertFalse(cache.cache_set_preserve_ttl(key, "after"))
+        assert not cache.cache_set_preserve_ttl(key, "after")
         cache.cache_set(key, "before", 60)
         _value, _expiry = cache._mem[key]
         cache._mem[key] = (_value, time.monotonic() - 1)
 
-        self.assertFalse(cache.cache_set_preserve_ttl(key, "after"))
-        self.assertNotIn(key, cache._mem)
+        assert not cache.cache_set_preserve_ttl(key, "after")
+        assert key not in cache._mem
 
 class CacheAtomicRedisPathTests(unittest.TestCase):
     def setUp(self):
@@ -275,17 +287,17 @@ class CacheAtomicRedisPathTests(unittest.TestCase):
     def test_redis_add_uses_single_atomic_nx_set_with_expiry(self):
         key = "lock:redis-add"
 
-        self.assertTrue(cache.cache_add(key, "owner-1", 60))
-        self.assertFalse(cache.cache_add(key, "owner-2", 60))
-        self.assertEqual(self.fake.data[key], "owner-1")
+        assert cache.cache_add(key, "owner-1", 60)
+        assert not cache.cache_add(key, "owner-2", 60)
+        assert self.fake.data[key] == "owner-1"
 
-        self.assertEqual(len(self.fake.set_calls), 2)
+        assert len(self.fake.set_calls) == 2
         for name, _value, nx, ex in self.fake.set_calls:
-            self.assertEqual(name, key)
-            self.assertIs(nx, True)
-            self.assertEqual(ex, 60)
+            assert name == key
+            assert nx is True
+            assert ex == 60
         # SET NX is one call: no separate get/exists probe.
-        self.assertEqual(self.fake.get_calls, [])
+        assert self.fake.get_calls == []
 
     def test_redis_release_uses_atomic_compare_delete(self):
         key = "lock:redis-release"
@@ -293,19 +305,19 @@ class CacheAtomicRedisPathTests(unittest.TestCase):
         self.fake.expires_at[key] = time.monotonic() + 60
 
         # A different owner (string form) must not release the lock.
-        self.assertFalse(cache.cache_delete_if_value(key, "token-2"))
-        self.assertEqual(self.fake.data[key], b"token-1")
+        assert not cache.cache_delete_if_value(key, "token-2")
+        assert self.fake.data[key] == b"token-1"
 
         # The owning string token releases the byte-stored value.
-        self.assertTrue(cache.cache_delete_if_value(key, "token-1"))
-        self.assertNotIn(key, self.fake.data)
+        assert cache.cache_delete_if_value(key, "token-1")
+        assert key not in self.fake.data
 
-        self.assertEqual(len(self.fake.eval_calls), 2)
+        assert len(self.fake.eval_calls) == 2
         for script, numkeys, name, expected in self.fake.eval_calls:
-            self.assertIn("redis.call", script)
-            self.assertEqual(numkeys, 1)
-            self.assertEqual(name, key)
-            self.assertIsInstance(expected, bytes)
+            assert "redis.call" in script
+            assert numkeys == 1
+            assert name == key
+            assert isinstance(expected, bytes)
 
     def test_redis_preserve_ttl_uses_atomic_replace(self):
         key = "session:redis-preserve"
@@ -313,18 +325,18 @@ class CacheAtomicRedisPathTests(unittest.TestCase):
         original_expiry = time.monotonic() + 60
         self.fake.expires_at[key] = original_expiry
 
-        self.assertTrue(cache.cache_set_preserve_ttl(key, "after"))
-        self.assertEqual(self.fake.data[key], "after")
-        self.assertEqual(self.fake.expires_at[key], original_expiry)
-        self.assertEqual(len(self.fake.eval_calls), 1)
+        assert cache.cache_set_preserve_ttl(key, "after")
+        assert self.fake.data[key] == "after"
+        assert self.fake.expires_at[key] == original_expiry
+        assert len(self.fake.eval_calls) == 1
         script, numkeys, name, value = self.fake.eval_calls[0]
-        self.assertIn("pttl", script)
-        self.assertEqual(numkeys, 1)
-        self.assertEqual(name, key)
-        self.assertEqual(value, "after")
-        self.assertEqual(self.fake.get_calls, [])
+        assert "pttl" in script
+        assert numkeys == 1
+        assert name == key
+        assert value == "after"
+        assert self.fake.get_calls == []
         # One atomic compare-delete call: no GET followed by DELETE.
-        self.assertEqual(self.fake.get_calls, [])
+        assert self.fake.get_calls == []
 
 
 class CandidateStoreMarkPresentedAtomicTests(unittest.TestCase):
@@ -370,14 +382,14 @@ class CandidateStoreMarkPresentedAtomicTests(unittest.TestCase):
         for thread in threads:
             thread.join()
 
-        self.assertEqual(results.count(None), 1)
-        self.assertEqual(len(results) - results.count(None), callers - 1)
+        assert results.count(None) == 1
+        assert len(results) - results.count(None) == callers - 1
         record = candidate_store.load_candidate_set(set_id, session_id="sess-race")
-        self.assertTrue(record["presented"])
-        self.assertEqual(record["selected_candidate_id"], "cd_race")
+        assert record["presented"]
+        assert record["selected_candidate_id"] == "cd_race"
         for error in results:
             if error:
-                self.assertIn("already presented", error)
+                assert "already presented" in error
 
     def test_mark_presented_reserves_once_and_rejects_duplicates(self):
         set_id = candidate_store.store_candidate_set(
@@ -387,15 +399,13 @@ class CandidateStoreMarkPresentedAtomicTests(unittest.TestCase):
                 "candidates": [{"candidate_id": "cd_one", "index": 0}],
             },
         )
-        self.assertIsNone(
-            candidate_store.mark_presented(set_id, "cd_one", session_id="sess-dup")
-        )
+        assert candidate_store.mark_presented(set_id, "cd_one", session_id="sess-dup") is None
         duplicate = candidate_store.mark_presented(
             set_id,
             "cd_one",
             session_id="sess-dup",
         )
-        self.assertIn("already presented", duplicate or "")
+        assert "already presented" in (duplicate or "")
         # A consumed set rejects every later reservation, even for a
         # different candidate id: presentation is one-time per set.
         other = candidate_store.mark_presented(
@@ -403,9 +413,9 @@ class CandidateStoreMarkPresentedAtomicTests(unittest.TestCase):
             "cd_nope",
             session_id="sess-dup",
         )
-        self.assertIn("already presented", other or "")
+        assert "already presented" in (other or "")
         record = candidate_store.load_candidate_set(set_id, session_id="sess-dup")
-        self.assertEqual(record["selected_candidate_id"], "cd_one")
+        assert record["selected_candidate_id"] == "cd_one"
 
 
 class CandidateStoreMarkPresentedRedisTests(unittest.TestCase):
@@ -437,37 +447,25 @@ class CandidateStoreMarkPresentedRedisTests(unittest.TestCase):
     def test_redis_transaction_reserves_once(self):
         set_id = self._store()
 
-        self.assertIsNone(
-            candidate_store.mark_presented(
-                set_id,
-                "cd_one",
-                session_id="sess-redis",
-            )
-        )
+        assert candidate_store.mark_presented(set_id, "cd_one", session_id="sess-redis") is None
         duplicate = candidate_store.mark_presented(
             set_id,
             "cd_one",
             session_id="sess-redis",
         )
 
-        self.assertIn("already presented", duplicate or "")
+        assert "already presented" in (duplicate or "")
         record = candidate_store.load_candidate_set(
             set_id,
             session_id="sess-redis",
         )
-        self.assertEqual(record["selected_candidate_id"], "cd_one")
+        assert record["selected_candidate_id"] == "cd_one"
 
     def test_redis_transaction_retries_watch_conflicts(self):
         self.fake.watch_failures = 2
         set_id = self._store()
 
-        self.assertIsNone(
-            candidate_store.mark_presented(
-                set_id,
-                "cd_one",
-                session_id="sess-redis",
-            )
-        )
+        assert candidate_store.mark_presented(set_id, "cd_one", session_id="sess-redis") is None
 
     def test_redis_transaction_reports_repeated_watch_conflicts(self):
         self.fake.watch_failures = 3
@@ -479,31 +477,19 @@ class CandidateStoreMarkPresentedRedisTests(unittest.TestCase):
             session_id="sess-redis",
         )
 
-        self.assertIn("candidate set changed", error or "")
+        assert "candidate set changed" in (error or "")
 
     def test_redis_miss_uses_the_process_memory_mirror(self):
         set_id = self._store()
         self.fake.data.pop(candidate_store._key(set_id))
 
-        self.assertIsNone(
-            candidate_store.mark_presented(
-                set_id,
-                "cd_one",
-                session_id="sess-redis",
-            )
-        )
+        assert candidate_store.mark_presented(set_id, "cd_one", session_id="sess-redis") is None
 
     def test_redis_errors_use_the_process_memory_mirror(self):
         set_id = self._store()
-        self.fake.pipeline_error = redis.exceptions.ResponseError("quota exceeded")
+        self.fake.pipeline_error = _QuotaRedisError()
 
-        self.assertIsNone(
-            candidate_store.mark_presented(
-                set_id,
-                "cd_one",
-                session_id="sess-redis",
-            )
-        )
+        assert candidate_store.mark_presented(set_id, "cd_one", session_id="sess-redis") is None
 
     def test_redis_transaction_rejects_wrong_owner_and_unknown_candidate(self):
         set_id = self._store()
@@ -519,8 +505,8 @@ class CandidateStoreMarkPresentedRedisTests(unittest.TestCase):
             session_id="sess-redis",
         )
 
-        self.assertIn("not owned", owner_error or "")
-        self.assertIn("candidate id is unknown", candidate_error or "")
+        assert "not owned" in (owner_error or "")
+        assert "candidate id is unknown" in (candidate_error or "")
 
     def test_redis_transaction_rejects_expired_or_invalid_records(self):
         expired_set_id = self._store()
@@ -539,8 +525,8 @@ class CandidateStoreMarkPresentedRedisTests(unittest.TestCase):
             session_id="sess-redis",
         )
 
-        self.assertIn("expired", expired_error or "")
-        self.assertIn("expiry is invalid", invalid_error or "")
+        assert "expired" in (expired_error or "")
+        assert "expiry is invalid" in (invalid_error or "")
 
     def test_unexpected_pipeline_failure_is_a_bounded_store_error(self):
         set_id = self._store()
@@ -552,7 +538,7 @@ class CandidateStoreMarkPresentedRedisTests(unittest.TestCase):
             session_id="sess-redis",
         )
 
-        self.assertEqual(error, "candidate presentation store unavailable")
+        assert error == "candidate presentation store unavailable"
 
 
 class CacheGetManyInMemoryTests(unittest.TestCase):
@@ -565,13 +551,13 @@ class CacheGetManyInMemoryTests(unittest.TestCase):
 
         result = cache.cache_get_many(["k1", "k2", "k3", "k1"])
 
-        self.assertEqual(list(result), ["k1", "k2", "k3"])
-        self.assertEqual(result["k1"], "v1")
-        self.assertEqual(result["k2"], b"v2")
-        self.assertIsNone(result["k3"])
+        assert list(result) == ["k1", "k2", "k3"]
+        assert result["k1"] == "v1"
+        assert result["k2"] == b"v2"
+        assert result["k3"] is None
 
     def test_empty_batch_read_is_a_noop(self):
-        self.assertEqual(cache.cache_get_many([]), {})
+        assert cache.cache_get_many([]) == {}
 
 
 class CacheGetManyRedisPathTests(unittest.TestCase):
@@ -592,13 +578,13 @@ class CacheGetManyRedisPathTests(unittest.TestCase):
 
         result = cache.cache_get_many(["a", "b", "missing", "a"])
 
-        self.assertEqual(len(self.fake.mget_calls), 1)
-        self.assertEqual(self.fake.mget_calls[0], ["a", "b", "missing"])
-        self.assertEqual(result["a"], b"va")
-        self.assertEqual(result["b"], b"vb")
-        self.assertIsNone(result["missing"])
+        assert len(self.fake.mget_calls) == 1
+        assert self.fake.mget_calls[0] == ["a", "b", "missing"]
+        assert result["a"] == b"va"
+        assert result["b"] == b"vb"
+        assert result["missing"] is None
         # Batch reads must not fall back to per-key GET round trips.
-        self.assertEqual(self.fake.get_calls, [])
+        assert self.fake.get_calls == []
 
     def test_redis_batch_read_fail_open_falls_back_to_memory(self):
         self.fake.data["a"] = b"va"
@@ -614,8 +600,8 @@ class CacheGetManyRedisPathTests(unittest.TestCase):
             result = cache.cache_get_many(["a", "mem"], fail_open=True)
 
         # Fail-open degrades the whole batch to process memory, never partial.
-        self.assertIsNone(result["a"])
-        self.assertEqual(result["mem"], "value")
+        assert result["a"] is None
+        assert result["mem"] == "value"
 
 
 class CacheGetManyAsyncTests(unittest.IsolatedAsyncioTestCase):
@@ -633,14 +619,16 @@ class CacheGetManyAsyncTests(unittest.IsolatedAsyncioTestCase):
 
         result = await cache.cache_get_many_async(["k1", "missing"])
 
-        self.assertEqual(result["k1"], "v1")
-        self.assertIsNone(result["missing"])
+        assert result["k1"] == "v1"
+        assert result["missing"] is None
 
     async def test_async_batch_read_is_bounded(self):
         def _slow_memory_get(_key):
             time.sleep(0.2)
             return None
 
-        with patch.object(cache, "_memory_get", side_effect=_slow_memory_get):
-            with self.assertRaises(asyncio.TimeoutError):
-                await cache.cache_get_many_async(["k"], timeout_s=0.01)
+        with (
+            patch.object(cache, "_memory_get", side_effect=_slow_memory_get),
+            pytest.raises(asyncio.TimeoutError),
+        ):
+            await cache.cache_get_many_async(["k"], timeout_s=0.01)

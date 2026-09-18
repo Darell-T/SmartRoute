@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  ChatWorkingPanel,
   workingPanelDetailText,
   workingPanelTriggerLabel,
 } from "./chat-working-panel.tsx";
@@ -68,6 +70,17 @@ test("the trigger copy is not rendered again in expanded details", () => {
 });
 
 test("presentation and completion internals stay out of activity rows", () => {
-  const source = fs.readFileSync(new URL("./chat-working-panel.tsx", import.meta.url), "utf8");
-  assert.match(source, /!isHiddenActivityTool\(chip\.tool\)/);
+  const html = renderToStaticMarkup(
+    createElement(ChatWorkingPanel, {
+      toolChips: [
+        { id: "search-1", tool: "discover_places", label: "Searching verified places", status: "ok", durationMs: 1200 },
+        { id: "hidden", tool: "complete_turn", label: "hidden", status: "running" },
+      ],
+      progress: { stage: "checking_live_conditions", status: "complete" },
+      reasoning: "Checking live service and current incidents",
+      isStreaming: false,
+    }),
+  );
+  assert.match(html, /Searching verified places/);
+  assert.doesNotMatch(html, />hidden</);
 });

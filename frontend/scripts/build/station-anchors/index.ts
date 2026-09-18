@@ -1,10 +1,11 @@
 import { MTA_ROUTE_COLORS, darkenHexColor } from "../mta-colors.ts";
 import type {
   Position,
-  PointGeometry,
-  LineStringGeometry,
   Feature,
   FeatureCollection,
+  LineStringGeometry,
+  JsonObject,
+  JsonValue,
 } from "../types.ts";
 import type {
   MeterPoint,
@@ -12,8 +13,16 @@ import type {
   VisualFeature,
   Projection,
   ProjectionCluster,
+  StationAnchorFeature,
+  StationAnchorMetadata,
+  StationAnchorMarker,
+  StationAnchorProperties,
   StationFeature,
   StationBuildResult,
+  RawStationDebugFeature,
+  SnapDebugFeature,
+  RejectedDebugFeature,
+  AmbiguousDebugFeature,
 } from "./types.ts";
 import {
   rawStationDebugFeature,
@@ -21,6 +30,12 @@ import {
   rejectedDebugFeature,
   ambiguousDebugFeature,
 } from "./debug-features.ts";
+import {
+  isJsonNumber,
+  isJsonObject,
+  isJsonString,
+  propertyString,
+} from "../visual-network/shared/route-config.ts";
 
 const MAX_SNAP_DISTANCE_M = 90;
 // Fallback tier for stations whose schematic lane drifted past the strict
@@ -83,7 +98,8 @@ function routeSortValue(routeId: string) {
   return index === -1 ? MTA_ROUTE_ORDER.length + routeId.charCodeAt(0) : index;
 }
 
-function sortRoutes(routeIds: unknown[]) {
+function sortRoutes(routeIds: JsonValue | undefined) {
+  if (!Array.isArray(routeIds)) return [];
   return [...new Set(routeIds.filter(Boolean).map(String))].sort((a, b) => {
     const rank = routeSortValue(a) - routeSortValue(b);
     return rank || a.localeCompare(b, "en", { numeric: true });
@@ -94,7 +110,7 @@ function routeColor(routeId: string) {
   return ROUTE_COLORS.get(routeId) ?? "#808183";
 }
 
-export function subwayBulletName(routeId: string) {
+export function subwayBulletName(routeId?: string | null) {
   const normalized = String(routeId ?? "").trim().toUpperCase();
   if (normalized === "6X") return "6d";
   if (normalized === "7X") return "7d";
@@ -104,7 +120,9 @@ export function subwayBulletName(routeId: string) {
   return normalized.toLowerCase();
 }
 
-function featureCollection(features: Feature[] = []): FeatureCollection {
+function featureCollection<F extends Feature<unknown, unknown>>(
+  features: F[] = [],
+): FeatureCollection<F> {
   return { type: "FeatureCollection", features };
 }
 
@@ -192,53 +210,106 @@ function projectPointToLineString(
   return best;
 }
 
-function visualFeatureId(feature: Feature, index: number) {
-  const properties = feature.properties ?? {};
+function visualFeatureId(properties: JsonObject, index: number, featureId: JsonValue | undefined) {
   return String(
     properties.corridor_id ??
       properties.bundle_id ??
       properties.lane_group_id ??
       properties.source_corridor_id ??
       properties.segment_id ??
+      featureId ??
       `visual-${index}`,
   );
 }
 
-function normalizeColorRouteIds(value: unknown) {
-  if (Array.isArray(value)) return sortRoutes(value);
-  if (value && typeof value === "object") {
-    return sortRoutes(Object.values(value as Record<string, unknown>).flat());
-  }
-  return [];
+function isLonLat(value: JsonValue | undefined): value is Position {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    Number.isFinite(value[0]) &&
+    Number.isFinite(value[1])
+  );
 }
 
-function buildVisualIndex(visual: FeatureCollection): VisualFeature[] {
-  return (visual.features ?? [])
-    .map((feature, index): VisualFeature | null => {
-      const geometry = feature.geometry;
-      if (!geometry || geometry.type !== "LineString") return null;
-      const coordinates = geometry.coordinates;
-      if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
-      const properties = feature.properties ?? {};
-      const routeIds = sortRoutes(properties.route_ids ?? []);
-      const colorRouteIds = normalizeColorRouteIds(properties.color_route_ids);
-      const allRouteIds = sortRoutes([...routeIds, ...colorRouteIds]);
-      if (allRouteIds.length === 0) return null;
+function routeIdsFromColorRouteIds(value: JsonValue | undefined): string[] {
+  if (Array.isArray(value)) return sortRoutes(value);
+  if (!isJsonObject(value)) return [];
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return [];
+  const collected: string[] = [];
+  for (const routes of Object.values(value)) {
+    if (Array.isArray(routes)) collected.push(...routes.map(String));
+  }
+  return sortRoutes(collected);
+}
 
-      return {
-        feature: feature as Feature<LineStringGeometry>,
-        index,
-        id: visualFeatureId(feature, index),
-        coordinates: coordinates as Position[],
-        routeIds,
-        colorRouteIds: colorRouteIds.length > 0 ? colorRouteIds : routeIds,
-        allRouteIds,
-        color: properties.color ?? null,
-        corridorId: properties.corridor_id ?? null,
-        physicalBundleId:
-          properties.physical_bundle_id ?? properties.lane_group_id ?? null,
-      };
-    })
+function geoJsonFeatureRecord(entry: JsonValue | undefined): JsonObject | null {
+  if (!isJsonObject(entry) || entry.type !== "Feature") return null;
+  return entry;
+}
+
+function stringOrNull(value: JsonValue | undefined): string | null {
+  return isJsonString(value) ? value : null;
+}
+
+function lineStringCoordinates(geometry: JsonValue | undefined): Position[] | null {
+  if (!isJsonObject(geometry) || geometry.type !== "LineString" || !Array.isArray(geometry.coordinates)) {
+    return null;
+  }
+  const coordinates = geometry.coordinates;
+  if (coordinates.length < 2 || !coordinates.every(isLonLat)) return null;
+  return coordinates;
+}
+
+function pointCoordinates(geometry: JsonValue | undefined): Position | null {
+  if (!isJsonObject(geometry) || geometry.type !== "Point" || !Array.isArray(geometry.coordinates)) {
+    return null;
+  }
+  const coordinates = geometry.coordinates;
+  if (coordinates.length < 2 || Array.isArray(coordinates[0])) return null;
+  const lon = Number(coordinates[0]);
+  const lat = Number(coordinates[1]);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  return [lon, lat];
+}
+
+function visualFeatureFromEntry(entry: JsonValue | undefined, index: number): VisualFeature | null {
+  const record = geoJsonFeatureRecord(entry);
+  if (!record) return null;
+  const coordinates = lineStringCoordinates(record.geometry);
+  if (!coordinates) return null;
+  const properties = isJsonObject(record.properties) ? record.properties : {};
+  const routeIds = sortRoutes(properties.route_ids);
+  const colorRouteIds = routeIdsFromColorRouteIds(properties.color_route_ids);
+  const allRouteIds = sortRoutes([...routeIds, ...colorRouteIds]);
+  if (allRouteIds.length === 0) return null;
+  const featureId = isJsonString(record.id) || isJsonNumber(record.id) ? record.id : undefined;
+  const feature: Feature<LineStringGeometry, JsonObject> = {
+    type: "Feature",
+    geometry: { type: "LineString", coordinates },
+    properties,
+  };
+  if (featureId !== undefined) feature.id = featureId;
+
+  return {
+    feature,
+    index,
+    id: visualFeatureId(properties, index, record.id),
+    coordinates,
+    routeIds,
+    colorRouteIds: colorRouteIds.length > 0 ? colorRouteIds : routeIds,
+    allRouteIds,
+    color: stringOrNull(properties.color),
+    corridorId: stringOrNull(properties.corridor_id),
+    physicalBundleId: (propertyString((properties).physical_bundle_id)
+    ?? propertyString((properties).lane_group_id)
+    ?? null),
+  };
+}
+
+function buildVisualIndex(visual: { features?: JsonValue[] }): VisualFeature[] {
+  return (visual.features ?? [])
+    .map((feature, index) => visualFeatureFromEntry(feature, index))
     .filter((feature): feature is VisualFeature => feature !== null);
 }
 
@@ -420,7 +491,8 @@ function badgeLayout(
     : BADGE_BASE_OFFSET_Y_PX;
   const y = baseY + (row - (rowCount - 1) / 2) * BADGE_SPACING_Y_PX;
 
-  return { row, col, offset: [x, y] };
+  const offset: [number, number] = [x, y];
+  return { row, col, offset };
 }
 
 function representativeProjection(cluster: ProjectionCluster) {
@@ -429,6 +501,33 @@ function representativeProjection(cluster: ProjectionCluster) {
       a.distance_m - b.distance_m ||
       routeSortValue(a.routeId) - routeSortValue(b.routeId),
   )[0];
+}
+
+const FIXED_MIN_ZOOM = new Map<StationAnchorMarker, number>([
+  ["station_label", 14.5],
+  ["station_route_badge", 14.5],
+]);
+
+const FIXED_MAX_ZOOM = new Map<StationAnchorMarker, number>([
+  ["single_stop_dot", 16],
+  ["shared_stop_dot", 16.5],
+  ["shared_stop_bar", 16.5],
+]);
+
+function clusterGeometryFields(cluster: ProjectionCluster, center?: Position | null) {
+  const representative = representativeProjection(cluster);
+  return {
+    snappedCoordinate: center ?? representative?.coordinate ?? cluster.centroid,
+    visualCorridorId: representative?.visualFeature.corridorId ?? representative?.visualFeature.id ?? undefined,
+    physicalBundleId: representative?.visualFeature.physicalBundleId ?? undefined,
+    tangent: representative?.tangent_bearing ?? 0,
+    snapDistance: Math.max(...cluster.projections.map((projection) => projection.distance_m)),
+    visualIds: [...new Set(cluster.projections.map((projection) => projection.visualFeature.id))],
+    snappedRouteIds: sortRoutes(cluster.projections.flatMap((projection) => projection.visualFeature.routeIds)),
+    snappedColorRouteIds: sortRoutes(
+      cluster.projections.flatMap((projection) => projection.visualFeature.colorRouteIds),
+    ),
+  };
 }
 
 function baseProperties({
@@ -440,76 +539,44 @@ function baseProperties({
   debugCandidateCount,
   debugRejectedCandidateCount,
 }: {
-  markerType: string;
+  markerType: StationAnchorMarker;
   station: StationFeature;
   cluster: ProjectionCluster;
   clusterId: string;
   center?: Position | null;
   debugCandidateCount: number;
   debugRejectedCandidateCount: number;
-}): Record<string, any> {
-  const stationProps = station.properties ?? {};
-  const routes = sortRoutes(cluster.projections.map((p) => p.routeId));
-  const visualIds = [
-    ...new Set(cluster.projections.map((p) => p.visualFeature.id)),
-  ];
-  const snappedRouteIds = sortRoutes(
-    cluster.projections.flatMap((p) => p.visualFeature.routeIds),
-  );
-  const snappedColorRouteIds = sortRoutes(
-    cluster.projections.flatMap((p) => p.visualFeature.colorRouteIds),
-  );
-  const representative = representativeProjection(cluster);
-  // The bundle midpoint (center) is where the marker is actually drawn; keep
-  // snapped_coordinate consistent with it so diagnostics line up.
-  const snappedCoordinate = center ?? representative?.coordinate ?? cluster.centroid;
-  const snapDistance = Math.max(
-    ...cluster.projections.map((p) => p.distance_m),
-  );
-  const tangent = representative?.tangent_bearing ?? 0;
-  const normal = (tangent + 90) % 360;
-
+}): StationAnchorProperties {
+  const routes = sortRoutes(cluster.projections.map((projection) => projection.routeId));
+  const geometry = clusterGeometryFields(cluster, center);
+  const normal = (geometry.tangent + 90) % 360;
   return {
     marker_type: markerType,
-    station_id: String(stationProps.station_id ?? station.id ?? ""),
-    name: String(stationProps.name ?? ""),
+    station_id: String(station.properties?.station_id ?? station.id ?? ""),
+    name: String(station.properties?.name ?? ""),
     route_ids: routes,
     route_count: routes.length,
     source_coordinate: station.geometry.coordinates,
-    snapped_coordinate: snappedCoordinate,
-    snapped_visual_feature_ids: visualIds,
-    snapped_route_ids: snappedRouteIds,
-    snapped_color_route_ids: snappedColorRouteIds,
-    visual_corridor_id:
-      representative?.visualFeature.corridorId ??
-      representative?.visualFeature.id ??
-      undefined,
-    physical_bundle_id:
-      representative?.visualFeature.physicalBundleId ?? undefined,
-    local_tangent_bearing: tangent,
+    snapped_coordinate: geometry.snappedCoordinate,
+    snapped_visual_feature_ids: geometry.visualIds,
+    snapped_route_ids: geometry.snappedRouteIds,
+    snapped_color_route_ids: geometry.snappedColorRouteIds,
+    visual_corridor_id: geometry.visualCorridorId,
+    physical_bundle_id: geometry.physicalBundleId,
+    local_tangent_bearing: geometry.tangent,
     local_normal_bearing: normal,
-    snap_distance_m: snapDistance,
-    snap_confidence: snapConfidence(snapDistance),
+    snap_distance_m: geometry.snapDistance,
+    snap_confidence: snapConfidence(geometry.snapDistance),
     marker_priority: routes.length * 10 + (routes.length > 1 ? 20 : 0),
-    min_zoom:
-      markerType === "station_label" || markerType === "station_route_badge"
-        ? 14.5
-        : routes.length > 1
-          ? 11.5
-          : 12.5,
-    max_zoom:
-      markerType === "single_stop_dot"
-        ? 16
-        : markerType === "shared_stop_dot" || markerType === "shared_stop_bar"
-          ? 16.5
-          : undefined,
+    min_zoom: FIXED_MIN_ZOOM.get(markerType) ?? (routes.length > 1 ? 11.5 : 12.5),
+    max_zoom: FIXED_MAX_ZOOM.get(markerType),
     debug_candidate_count: debugCandidateCount,
     debug_rejected_candidate_count: debugRejectedCandidateCount,
     debug_cluster_id: clusterId,
   };
 }
 
-function makePointFeature(properties: Record<string, any>, coordinate: Position): Feature<PointGeometry> {
+function makePointFeature(properties: StationAnchorProperties, coordinate: Position): StationAnchorFeature {
   return {
     type: "Feature",
     properties,
@@ -560,9 +627,9 @@ function clusterBundleGeometry(cluster: ProjectionCluster) {
 }
 
 function makeSharedBarFeature(
-  properties: Record<string, any>,
+  properties: StationAnchorProperties,
   bundle: ReturnType<typeof clusterBundleGeometry>,
-): Feature<LineStringGeometry> {
+): StationAnchorFeature {
   const routeCount = properties.route_ids.length;
   const minLength = Math.min(
     SHARED_BAR_MAX_LENGTH_M,
@@ -596,13 +663,13 @@ function emitClusterFeatures({
   clusterId: string;
   debugCandidateCount: number;
   debugRejectedCandidateCount: number;
-}): Feature[] {
+}): StationAnchorFeature[] {
   const routes = sortRoutes(cluster.projections.map((p) => p.routeId));
   const colors = new Set(routes.map(routeColor));
   const bundle = clusterBundleGeometry(cluster);
   const center = bundle.center;
-  const features: Feature[] = [];
-  const markerType =
+  const features: StationAnchorFeature[] = [];
+  const markerType: StationAnchorMarker =
     routes.length === 1
       ? "single_stop_dot"
       : colors.size === 1
@@ -645,8 +712,9 @@ function emitClusterFeatures({
     debugRejectedCandidateCount,
   });
   const labelBelow = routes.length === 1;
+  const labelOffset: [number, number] = labelBelow ? [0, 1.1] : [0, -1.45];
   labelProperties.label_anchor = labelBelow ? "top" : "bottom";
-  labelProperties.label_offset = labelBelow ? [0, 1.1] : [0, -1.45];
+  labelProperties.label_offset = labelOffset;
   features.push(makePointFeature(labelProperties, center));
 
   const labelLines = estimateLabelLines(labelProperties.name);
@@ -676,114 +744,153 @@ function emitClusterFeatures({
   return features;
 }
 
+type StationProjectionPass = {
+  projections: Projection[];
+  debugCandidateCount: number;
+  debugRejectedCandidateCount: number;
+};
+
+function projectStationRoutes(
+  visualIndex: VisualFeature[],
+  station: StationFeature,
+  routeIds: string[],
+  rejected: RejectedDebugFeature[],
+  snaps: SnapDebugFeature[],
+): StationProjectionPass {
+  const projections: Projection[] = [];
+  let debugCandidateCount = 0;
+  let debugRejectedCandidateCount = 0;
+  const unmatchedRouteIds: string[] = [];
+  for (const routeId of routeIds) {
+    const result = bestProjectionForRoute({
+      visualIndex,
+      stationCoord: station.geometry.coordinates,
+      routeId,
+    });
+    debugCandidateCount += result.candidateCount;
+    debugRejectedCandidateCount += result.rejected.length;
+    for (const rejectedProjection of result.rejected) {
+      rejected.push(rejectedDebugFeature(station, rejectedProjection));
+    }
+    if (!result.best) unmatchedRouteIds.push(routeId);
+    else {
+      projections.push(result.best);
+      snaps.push(snapDebugFeature(station, result.best));
+    }
+  }
+  for (const routeId of unmatchedRouteIds) {
+    const result = bestProjectionForRoute({
+      visualIndex,
+      stationCoord: station.geometry.coordinates,
+      routeId,
+      maxSnapM: RELAXED_SNAP_DISTANCE_M,
+    });
+    if (!result.best) continue;
+    projections.push(result.best);
+    snaps.push(snapDebugFeature(station, result.best));
+  }
+  return { projections, debugCandidateCount, debugRejectedCandidateCount };
+}
+
+function stationFeatureFromEntry(entry: JsonValue | undefined): StationFeature | null {
+  const record = geoJsonFeatureRecord(entry);
+  if (!record) return null;
+  const coordinates = pointCoordinates(record.geometry);
+  if (!coordinates) return null;
+  const rawProperties = isJsonObject(record.properties) ? record.properties : {};
+  const station: StationFeature = {
+    type: "Feature",
+    geometry: { type: "Point", coordinates },
+    properties: {
+      station_id: propertyString(rawProperties.station_id),
+      name: propertyString(rawProperties.name),
+      route_ids: Array.isArray(rawProperties.route_ids) ? rawProperties.route_ids.map(String) : [],
+    },
+  };
+  if (isJsonString(record.id) || isJsonNumber(record.id)) station.id = record.id;
+  return station;
+}
+
+function processStation(
+  station: StationFeature,
+  visualIndex: VisualFeature[],
+  anchors: StationAnchorFeature[],
+  raw: RawStationDebugFeature[],
+  snaps: SnapDebugFeature[],
+  rejected: RejectedDebugFeature[],
+  ambiguous: AmbiguousDebugFeature[],
+): void {
+  if (!station.geometry || station.geometry.type !== "Point") return;
+  const routeIds = sortRoutes(station.properties?.route_ids ?? []);
+  raw.push(rawStationDebugFeature(station, routeIds));
+  const pass = projectStationRoutes(visualIndex, station, routeIds, rejected, snaps);
+  if (pass.projections.length === 0) {
+    ambiguous.push(
+      ambiguousDebugFeature(station, routeIds, "no_valid_projection", {
+        debug_candidate_count: pass.debugCandidateCount,
+        debug_rejected_candidate_count: pass.debugRejectedCandidateCount,
+      }),
+    );
+    return;
+  }
+  const stationId = String(station.properties?.station_id ?? station.id ?? "station");
+  for (const [index, cluster] of clusterProjections(pass.projections).entries()) {
+    anchors.push(...emitClusterFeatures({
+      station,
+      cluster,
+      clusterId: `${stationId}-cluster-${index}`,
+      debugCandidateCount: pass.debugCandidateCount,
+      debugRejectedCandidateCount: pass.debugRejectedCandidateCount,
+    }));
+  }
+}
+
+type IncomingCollection = {
+  features?: JsonValue[];
+  metadata?: JsonValue;
+};
+
 export function buildStationAnchors({
   visual,
   stations,
   options = {},
 }: {
-  visual: FeatureCollection;
-  stations: FeatureCollection<StationFeature>;
+  visual: IncomingCollection;
+  stations: IncomingCollection;
   options?: { maxSnapDistanceM?: number };
-}): StationBuildResult & { metadata: Record<string, any> } {
+}): StationBuildResult {
   const visualIndex = buildVisualIndex(visual);
-  const anchors: Feature[] = [];
-  const raw: Feature[] = [];
-  const snaps: Feature[] = [];
-  const rejected: Feature[] = [];
-  const ambiguous: Feature[] = [];
-
+  const anchors: StationAnchorFeature[] = [];
+  const raw: RawStationDebugFeature[] = [];
+  const snaps: SnapDebugFeature[] = [];
+  const rejected: RejectedDebugFeature[] = [];
+  const ambiguous: AmbiguousDebugFeature[] = [];
   const stationFeatures = stations.features ?? [];
-  for (const station of stationFeatures) {
-    if (!station.geometry || station.geometry.type !== "Point") continue;
-    const routeIds = sortRoutes(station.properties?.route_ids ?? []);
-    raw.push(rawStationDebugFeature(station, routeIds));
-
-    const stationCoord = station.geometry.coordinates;
-    const projections: Projection[] = [];
-    let debugCandidateCount = 0;
-    let debugRejectedCandidateCount = 0;
-
-    const unmatchedRouteIds: string[] = [];
-    for (const routeId of routeIds) {
-      const result = bestProjectionForRoute({
-        visualIndex,
-        stationCoord,
-        routeId,
-      });
-      debugCandidateCount += result.candidateCount;
-      debugRejectedCandidateCount += result.rejected.length;
-      for (const rejectedProjection of result.rejected) {
-        rejected.push(rejectedDebugFeature(station, rejectedProjection));
-      }
-      if (!result.best) {
-        unmatchedRouteIds.push(routeId);
-        continue;
-      }
-      projections.push(result.best);
-      snaps.push(snapDebugFeature(station, result.best));
-    }
-
-    // Relaxed retry runs PER ROUTE, not only when the whole station failed:
-    // at Court Sq the 7 snaps at ~20m while the G terminal lane sits ~127m
-    // out -- without the per-route retry the G silently vanishes from its
-    // own terminal (snap_confidence comes out "low" from the distance).
-    for (const routeId of unmatchedRouteIds) {
-      const result = bestProjectionForRoute({
-        visualIndex,
-        stationCoord,
-        routeId,
-        maxSnapM: RELAXED_SNAP_DISTANCE_M,
-      });
-      if (!result.best) continue;
-      projections.push(result.best);
-      snaps.push(snapDebugFeature(station, result.best));
-    }
-
-    if (projections.length === 0) {
-      ambiguous.push(
-        ambiguousDebugFeature(station, routeIds, "no_valid_projection", {
-          debug_candidate_count: debugCandidateCount,
-          debug_rejected_candidate_count: debugRejectedCandidateCount,
-        }),
-      );
-      continue;
-    }
-
-    const clusters = clusterProjections(projections);
-    clusters.forEach((cluster, index) => {
-      const stationId = String(
-        station.properties?.station_id ?? station.id ?? "station",
-      );
-      anchors.push(
-        ...emitClusterFeatures({
-          station,
-          cluster,
-          clusterId: `${stationId}-cluster-${index}`,
-          debugCandidateCount,
-          debugRejectedCandidateCount,
-        }),
-      );
-    });
+  for (const feature of stationFeatures) {
+    const station = stationFeatureFromEntry(feature);
+    if (!station) continue;
+    processStation(station, visualIndex, anchors, raw, snaps, rejected, ambiguous);
   }
 
-  const result = {
-    anchors: featureCollection(anchors),
+  const visualMetadata = isJsonObject(visual.metadata) ? visual.metadata : {};
+  const metadata: StationAnchorMetadata = {
+    max_snap_distance_m: options.maxSnapDistanceM ?? MAX_SNAP_DISTANCE_M,
+    visual_generated_at: propertyString(visualMetadata.generated_at) ?? null,
+    visual_geometry_source: propertyString(visualMetadata.visual_geometry_source) ?? null,
+    visual_geometry_source_dataset_id:
+      propertyString(visualMetadata.visual_geometry_source_dataset_id) ?? null,
+    visual_feature_count: visualIndex.length,
+    station_count: stationFeatures.length,
+    anchor_feature_count: anchors.length,
+  };
+  const result: StationBuildResult = {
+    anchors: { type: "FeatureCollection", features: anchors, metadata },
     raw: featureCollection(raw),
     snaps: featureCollection(snaps),
     rejected: featureCollection(rejected),
     ambiguous: featureCollection(ambiguous),
-    metadata: {
-      max_snap_distance_m: options.maxSnapDistanceM ?? MAX_SNAP_DISTANCE_M,
-      visual_generated_at: visual.metadata?.generated_at ?? null,
-      visual_geometry_source: visual.metadata?.visual_geometry_source ?? null,
-      visual_geometry_source_dataset_id:
-        visual.metadata?.visual_geometry_source_dataset_id ?? null,
-      visual_feature_count: visualIndex.length,
-      station_count: stationFeatures.length,
-      anchor_feature_count: anchors.length,
-    },
+    metadata,
   };
-  result.anchors.metadata = result.metadata;
   return result;
 }
 
@@ -791,48 +898,52 @@ const RUNTIME_DEBUG_PROPERTY_KEYS = [
   "debug_candidate_count",
   "debug_rejected_candidate_count",
   "debug_cluster_id",
-];
+] as const;
 
-export function stripRuntimeStationAnchorDebugProperties(
-  collection: FeatureCollection,
-): FeatureCollection {
-  return {
-    ...collection,
-    features: (collection.features ?? []).map((feature: Feature) => {
-      const properties = { ...(feature.properties ?? {}) };
-      for (const key of RUNTIME_DEBUG_PROPERTY_KEYS) {
-        delete properties[key];
-      }
-      return { ...feature, properties };
-    }),
-  };
+export function stripRuntimeStationAnchorDebugProperties<
+  P extends {
+    debug_candidate_count?: JsonValue;
+    debug_rejected_candidate_count?: JsonValue;
+    debug_cluster_id?: JsonValue;
+  },
+>(collection: {
+  type?: string;
+  features?: Feature<unknown, P>[];
+  metadata?: JsonValue;
+}) {
+  const features = (collection.features ?? []).map((feature) => {
+    const properties = { ...feature.properties };
+    for (const key of RUNTIME_DEBUG_PROPERTY_KEYS) {
+      delete properties[key];
+    }
+    return { ...feature, properties };
+  });
+  if ("metadata" in collection) {
+    return { type: "FeatureCollection", features, metadata: collection.metadata };
+  }
+  return { type: "FeatureCollection", features };
 }
 
-export function splitStationAnchorCollections(anchors: FeatureCollection) {
+export function splitStationAnchorCollections(anchors: {
+  type?: string;
+  features?: readonly StationAnchorFeature[];
+}) {
   const features = anchors.features ?? [];
   return {
     dots: featureCollection(
-      features.filter(
-        (feature) => feature.properties?.marker_type === "single_stop_dot",
-      ),
+      features.filter((feature) => feature.properties.marker_type === "single_stop_dot"),
     ),
     sharedStops: featureCollection(
-      features.filter((feature) =>
-        ["shared_stop_dot", "shared_stop_bar"].includes(
-          feature.properties?.marker_type,
-        ),
-      ),
+      features.filter((feature) => {
+        const markerType = feature.properties.marker_type;
+        return markerType === "shared_stop_dot" || markerType === "shared_stop_bar";
+      }),
     ),
     labels: featureCollection(
-      features.filter(
-        (feature) => feature.properties?.marker_type === "station_label",
-      ),
+      features.filter((feature) => feature.properties.marker_type === "station_label"),
     ),
     badges: featureCollection(
-      features.filter(
-        (feature) =>
-          feature.properties?.marker_type === "station_route_badge",
-      ),
+      features.filter((feature) => feature.properties.marker_type === "station_route_badge"),
     ),
   };
 }

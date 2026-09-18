@@ -10,6 +10,7 @@ only; they never need the upstream API key or make a live request.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import math
 import os
@@ -23,20 +24,15 @@ from pydantic import BaseModel, Field
 
 from app import runtime
 
-
 DEFAULT_API_URL = "https://511ny.org/api/v2/get/event"
 DEFAULT_POLL_INTERVAL_SECONDS = 300.0
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_STALE_AFTER_SECONDS = 900.0
 DEFAULT_MAX_STALE_SECONDS = 3600.0
-# This envelope covers the five boroughs and nearby bridge/tunnel approaches.
-NYC_BOUNDS = (40.45, 40.95, -74.30, -73.65)  # min_lat, max_lat, min_lon, max_lon
+NYC_BOUNDS = (40.45, 40.95, -74.30, -73.65)
 DEFAULT_NYC_BUFFER_DEGREES = 0.05
 MAX_ATTEMPTS = 3
 NYC_COUNTIES = {"bronx", "kings", "new york", "queens", "richmond"}
-# County text is not reliable enough to be the only inclusion criterion, but
-# known adjacent/non-NYC counties must not leak in through the broad bridge and
-# tunnel envelope.  Missing or unrecognized county text falls back to the box.
 KNOWN_NON_NYC_COUNTIES = {
     "albany", "allegany", "bronx", "broome", "cattaraugus", "cayuga",
     "chautauqua", "chemung", "chenango", "clinton", "columbia",
@@ -74,8 +70,6 @@ class Normalized511Incident(BaseModel):
     updated_at: datetime | None = None
     starts_at: datetime | None = None
     expected_end_at: datetime | None = None
-    # A deliberately small, non-sensitive set of source metadata aids server
-    # diagnostics without retaining or sending the full provider record onward.
     source_metadata: dict[str, str] = Field(default_factory=dict)
 
 
@@ -86,8 +80,6 @@ class IncidentSnapshot(BaseModel):
     source_record_count: int = 0
     nyc_record_count: int = 0
     invalid_record_count: int = 0
-    # Fixture snapshots follow the exact live normalization path, but callers
-    # and diagnostics still need to know that they did not come from 511NY.
     source_origin: Literal["live", "fixture"] | None = None
     status: Literal["fresh", "stale", "unavailable"]
     last_error: str | None = None
@@ -98,6 +90,71 @@ def _finite_env_float(name: str, default: float) -> float:
     if not math.isfinite(value):
         raise ValueError(f"{name} must be finite")
     return value
+
+
+def _validated_ny511_url(api_url: str) -> str | None:
+    parsed = urlsplit(api_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in {"511ny.org", "www.511ny.org"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        return None
+    return api_url
+
+
+def _ny511_timing() -> tuple[float, float, float, float, float] | None:
+    try:
+        poll_interval = max(
+            60.0,
+            _finite_env_float("NY511_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
+        )
+        timeout = max(
+            1.0,
+            _finite_env_float("NY511_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
+        )
+        stale_after = max(
+            1.0,
+            _finite_env_float("NY511_STALE_AFTER_SECONDS", DEFAULT_STALE_AFTER_SECONDS),
+        )
+        max_stale = max(
+            stale_after,
+            _finite_env_float("NY511_MAX_STALE_SECONDS", DEFAULT_MAX_STALE_SECONDS),
+        )
+        buffer = max(
+            0.0,
+            min(
+                0.25,
+                _finite_env_float("NY511_NYC_BUFFER_DEGREES", DEFAULT_NYC_BUFFER_DEGREES),
+            ),
+        )
+    except ValueError:
+        return None
+    return poll_interval, timeout, stale_after, max_stale, buffer
+
+
+def _ny511_mode(
+    enabled: bool,
+    fixture_path: str | None,
+    runtime_environment: str,
+    key: str | None,
+) -> tuple[str | None, str | None, bool]:
+    if not enabled:
+        return "source disabled", None, False
+    if fixture_path:
+        if runtime_environment not in {"development", "dev", "test", "testing"}:
+            return (
+                "511NY fixture mode requires a development or test environment",
+                None,
+                False,
+            )
+        return "using development 511NY fixture", fixture_path, True
+    if not key:
+        return "API key not configured", None, False
+    return None, None, True
 
 
 @dataclass(frozen=True)
@@ -114,97 +171,24 @@ class NY511Settings:
     fixture_path: str | None = None
 
     @classmethod
-    def from_env(cls) -> "NY511Settings":
+    def from_env(cls) -> NY511Settings:
         """Read optional server settings without making missing config fatal."""
         key = (os.getenv("NY511_API_KEY") or "").strip() or None
         raw_enabled = (os.getenv("NY511_ENABLED") or "true").strip().lower()
         enabled = raw_enabled not in {"0", "false", "no", "off"}
         fixture_path = (os.getenv("NY511_FIXTURE_PATH") or "").strip() or None
-        # Fixture loading requires an explicit non-production runtime profile.
-        # An unset profile must never replace live provider data in deployment.
-        runtime_environment = runtime.runtime_profile()
         api_url = (os.getenv("NY511_API_BASE_URL") or DEFAULT_API_URL).strip()
-        parsed_url = urlsplit(api_url)
-        if (
-            parsed_url.scheme != "https"
-            or parsed_url.hostname not in {"511ny.org", "www.511ny.org"}
-            or parsed_url.query
-            or parsed_url.fragment
-            or parsed_url.username
-            or parsed_url.password
-        ):
+        runtime_environment = runtime.runtime_profile()
+        validated_url = _validated_ny511_url(api_url)
+        if validated_url is None:
             return cls(api_key=key, enabled=False, diagnostic="invalid API base URL")
-
-        try:
-            poll_interval = max(
-                60.0,
-                _finite_env_float(
-                    "NY511_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS
-                ),
-            )
-            timeout = max(
-                1.0,
-                _finite_env_float(
-                    "NY511_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS
-                ),
-            )
-            stale_after = max(
-                1.0,
-                _finite_env_float(
-                    "NY511_STALE_AFTER_SECONDS", DEFAULT_STALE_AFTER_SECONDS
-                ),
-            )
-            max_stale = max(
-                stale_after,
-                _finite_env_float(
-                    "NY511_MAX_STALE_SECONDS", DEFAULT_MAX_STALE_SECONDS
-                ),
-            )
-            buffer = max(
-                0.0,
-                min(
-                    0.25,
-                    _finite_env_float(
-                        "NY511_NYC_BUFFER_DEGREES", DEFAULT_NYC_BUFFER_DEGREES
-                    ),
-                ),
-            )
-        except ValueError:
+        timing = _ny511_timing()
+        if timing is None:
             return cls(api_key=key, enabled=False, diagnostic="invalid 511NY numeric configuration")
-
-        if not enabled:
-            return cls(key, False, api_url, poll_interval, timeout, stale_after, max_stale, buffer, "source disabled")
-        if fixture_path:
-            if runtime_environment not in {"development", "dev", "test", "testing"}:
-                return cls(
-                    key,
-                    False,
-                    api_url,
-                    poll_interval,
-                    timeout,
-                    stale_after,
-                    max_stale,
-                    buffer,
-                    "511NY fixture mode requires a development or test environment",
-                )
-            # A fixture is intentionally a development/test substitute for the
-            # upstream source.  It needs no key and is loaded by the poller
-            # into the normal process-local SnapshotStore.
-            return cls(
-                key,
-                True,
-                api_url,
-                poll_interval,
-                timeout,
-                stale_after,
-                max_stale,
-                buffer,
-                "using development 511NY fixture",
-                fixture_path,
-            )
-        if not key:
-            return cls(key, False, api_url, poll_interval, timeout, stale_after, max_stale, buffer, "API key not configured")
-        return cls(key, True, api_url, poll_interval, timeout, stale_after, max_stale, buffer)
+        diagnostic, fixture_path, enabled = _ny511_mode(
+            enabled, fixture_path, runtime_environment, key
+        )
+        return cls(key, enabled, validated_url, *timing, diagnostic, fixture_path)
 
 
 class NY511FetchError(Exception):
@@ -239,7 +223,7 @@ def _timestamp(value: Any) -> datetime | None:
         if isinstance(value, (int, float)) or (isinstance(value, str) and value.strip().isdigit()):
             return datetime.fromtimestamp(float(value), tz=UTC)
         if isinstance(value, str):
-            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.strip())
             return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
     except (OverflowError, OSError, ValueError):
         return None
@@ -272,35 +256,29 @@ def _county_key(record: dict[str, Any]) -> str | None:
     return key or None
 
 
-def _normalize_event(
-    record: Any,
-    *,
-    nyc_buffer_degrees: float,
-) -> tuple[Normalized511Incident | None, bool]:
-    """Return normalized record plus whether provider data was malformed."""
-    if not isinstance(record, dict):
-        return None, True
+def _event_identity(record: dict[str, Any]) -> tuple[str, float, float] | None:
     # V2 documents ``ID`` as the unique event identifier.  ``SourceId`` is
     # retained only as a compatibility fallback for provider variants.
     source_id = _text(record.get("ID")) or _text(record.get("SourceId"))
     latitude = _coordinate(record.get("Latitude"), latitude=True)
     longitude = _coordinate(record.get("Longitude"), latitude=False)
     if not source_id or latitude is None or longitude is None:
-        return None, True
-    if not _in_nyc_envelope(latitude, longitude, nyc_buffer_degrees):
-        return None, False
-    county_key = _county_key(record)
-    if county_key in KNOWN_NON_NYC_COUNTIES:
-        return None, False
+        return None
+    return source_id, latitude, longitude
 
-    secondary_latitude = _coordinate(record.get("LatitudeSecondary"), latitude=True)
-    secondary_longitude = _coordinate(record.get("LongitudeSecondary"), latitude=False)
-    if secondary_latitude is None or secondary_longitude is None:
-        secondary_latitude = secondary_longitude = None
-    severity_raw = _text(record.get("Severity"))
-    encoded_polyline = _text(record.get("EncodedPolyline")) or _text(record.get("MapEncodedPolyline"))
-    geometry = {"encoded_polyline": encoded_polyline} if encoded_polyline else None
-    metadata = {
+
+def _optional_secondary_coords(
+    record: dict[str, Any],
+) -> tuple[float | None, float | None]:
+    latitude = _coordinate(record.get("LatitudeSecondary"), latitude=True)
+    longitude = _coordinate(record.get("LongitudeSecondary"), latitude=False)
+    if latitude is None or longitude is None:
+        return None, None
+    return latitude, longitude
+
+
+def _event_source_metadata(record: dict[str, Any]) -> dict[str, str]:
+    return {
         name: value
         for name, value in {
             "organization": _text(record.get("Organization")),
@@ -309,6 +287,16 @@ def _normalize_event(
         }.items()
         if value is not None
     }
+
+
+def _normalized_511_incident(
+    record: dict[str, Any], source_id: str, latitude: float, longitude: float
+) -> Normalized511Incident:
+    secondary_latitude, secondary_longitude = _optional_secondary_coords(record)
+    severity_raw = _text(record.get("Severity"))
+    encoded_polyline = _text(record.get("EncodedPolyline")) or _text(
+        record.get("MapEncodedPolyline")
+    )
     return Normalized511Incident(
         source_id=source_id,
         event_type=_text(record.get("EventType")),
@@ -324,14 +312,37 @@ def _normalize_event(
         roadway_name=_text(record.get("RoadwayName")),
         direction_of_travel=_text(record.get("DirectionOfTravel")),
         lanes_affected=_text(record.get("LanesAffected")),
-        is_full_closure=record.get("IsFullClosure") if isinstance(record.get("IsFullClosure"), bool) else None,
-        geometry=geometry,
+        is_full_closure=(
+            record.get("IsFullClosure")
+            if isinstance(record.get("IsFullClosure"), bool)
+            else None
+        ),
+        geometry={"encoded_polyline": encoded_polyline} if encoded_polyline else None,
         reported_at=_timestamp(record.get("Reported")),
         updated_at=_timestamp(record.get("LastUpdated")),
         starts_at=_timestamp(record.get("StartDate")),
         expected_end_at=_timestamp(record.get("PlannedEndDate")),
-        source_metadata=metadata,
-    ), False
+        source_metadata=_event_source_metadata(record),
+    )
+
+
+def _normalize_event(
+    record: Any,
+    *,
+    nyc_buffer_degrees: float,
+) -> tuple[Normalized511Incident | None, bool]:
+    if not isinstance(record, dict):
+        return None, True
+    identity = _event_identity(record)
+    if identity is None:
+        return None, True
+    source_id, latitude, longitude = identity
+    if (
+        not _in_nyc_envelope(latitude, longitude, nyc_buffer_degrees)
+        or _county_key(record) in KNOWN_NON_NYC_COUNTIES
+    ):
+        return None, False
+    return _normalized_511_incident(record, source_id, latitude, longitude), False
 
 
 def normalize_event(record: Any, *, nyc_buffer_degrees: float = DEFAULT_NYC_BUFFER_DEGREES) -> Normalized511Incident | None:
@@ -359,12 +370,46 @@ def _normalize_events(
     return list(incidents.values()), invalid_record_count
 
 
+def _parse_event_payload(response: httpx.Response) -> list[Any]:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise NY511FetchError("511NY returned malformed JSON", retryable=False) from exc
+    if not isinstance(payload, list):
+        raise NY511FetchError("511NY returned an unexpected event schema", retryable=False)
+    return payload
+
+
+def _http_fetch_error(response: httpx.Response) -> NY511FetchError:
+    retryable = response.status_code == 429 or response.status_code >= 500
+    retry_after = None
+    if response.status_code == 429:
+        try:
+            retry_after = float(response.headers.get("Retry-After", ""))
+        except (AttributeError, TypeError, ValueError):
+            retry_after = None
+    return NY511FetchError(
+        f"511NY request failed with HTTP {response.status_code}",
+        retryable=retryable,
+        retry_after_seconds=retry_after,
+    )
+
+
+def _backoff_seconds(last_error: NY511FetchError, attempt: int) -> float:
+    # A 429 receives the provider delay when supplied, never shorter
+    # than the 6 seconds implied by its 10-calls-per-minute budget.
+    # Other transient failures use a small bounded exponential backoff.
+    delay = 0.5 * (2**attempt)
+    if last_error.retry_after_seconds is not None:
+        return max(6.0, min(60.0, last_error.retry_after_seconds))
+    if "HTTP 429" in str(last_error):
+        return 6.0
+    return delay
+
+
 class NY511Client:
     def __init__(self, settings: NY511Settings, *, max_attempts: int = MAX_ATTEMPTS) -> None:
         self._settings = settings
-        # Production retains the bounded retry policy.  Opt-in certification
-        # can request exactly one upstream attempt without duplicating this
-        # client or weakening normal refresh behavior.
         self._max_attempts = max(1, min(MAX_ATTEMPTS, int(max_attempts)))
 
     async def fetch_events(self) -> list[Any]:
@@ -373,31 +418,16 @@ class NY511Client:
         last_error: NY511FetchError | None = None
         for attempt in range(self._max_attempts):
             try:
-                async with httpx.AsyncClient(timeout=self._settings.request_timeout_seconds) as client:
+                async with httpx.AsyncClient(  # noqa: TID251
+                    timeout=self._settings.request_timeout_seconds
+                ) as client:
                     response = await client.get(
                         self._settings.api_url,
                         params={"key": self._settings.api_key, "format": "json"},
                     )
                 if response.status_code == 200:
-                    try:
-                        payload = response.json()
-                    except ValueError as exc:
-                        raise NY511FetchError("511NY returned malformed JSON", retryable=False) from exc
-                    if not isinstance(payload, list):
-                        raise NY511FetchError("511NY returned an unexpected event schema", retryable=False)
-                    return payload
-                retryable = response.status_code == 429 or response.status_code >= 500
-                retry_after = None
-                if response.status_code == 429:
-                    try:
-                        retry_after = float(response.headers.get("Retry-After", ""))
-                    except (AttributeError, TypeError, ValueError):
-                        retry_after = None
-                last_error = NY511FetchError(
-                    f"511NY request failed with HTTP {response.status_code}",
-                    retryable=retryable,
-                    retry_after_seconds=retry_after,
-                )
+                    return _parse_event_payload(response)
+                last_error = _http_fetch_error(response)
             except httpx.TimeoutException:
                 last_error = NY511FetchError("511NY request timed out", retryable=True)
             except httpx.RequestError:
@@ -405,15 +435,7 @@ class NY511Client:
 
             if last_error is None or not last_error.retryable or attempt == self._max_attempts - 1:
                 break
-            # A 429 receives the provider delay when supplied, never shorter
-            # than the 6 seconds implied by its 10-calls-per-minute budget.
-            # Other transient failures use a small bounded exponential backoff.
-            delay = 0.5 * (2**attempt)
-            if last_error.retry_after_seconds is not None:
-                delay = max(6.0, min(60.0, last_error.retry_after_seconds))
-            elif "HTTP 429" in str(last_error):
-                delay = 6.0
-            await asyncio.sleep(delay)
+            await asyncio.sleep(_backoff_seconds(last_error, attempt))
         assert last_error is not None
         raise last_error
 
@@ -496,7 +518,6 @@ class NY511Poller:
         self._task: asyncio.Task[None] | None = None
 
     async def _fixture_records(self) -> list[Any]:
-        """Read one raw provider-shaped development fixture without network I/O."""
 
         fixture_path = self.settings.fixture_path
         if not fixture_path:
@@ -504,7 +525,7 @@ class NY511Poller:
 
         def _read() -> list[Any]:
             try:
-                with open(fixture_path, "r", encoding="utf-8") as handle:
+                with open(fixture_path, encoding="utf-8") as handle:
                     payload = json.load(handle)
             except (OSError, ValueError, TypeError) as exc:
                 raise NY511FetchError("511NY fixture is malformed or unreadable", retryable=False) from exc
@@ -529,13 +550,12 @@ class NY511Poller:
                 else:
                     records = await self.client.fetch_events()
                     await self.store.record_success(records, source_origin="live")
-                return True
             except NY511FetchError as exc:
                 await self.store.record_failure(str(exc))
-            except Exception:
-                # Do not surface unexpected response/client implementation
-                # details (which could include a request URL) in diagnostics.
+            except Exception:  # noqa: BLE001 511 refresh faults stay recorded as failure
                 await self.store.record_failure("511NY refresh failed")
+            else:
+                return True
             return False
 
     def start(self) -> asyncio.Task[None] | None:
@@ -552,16 +572,12 @@ class NY511Poller:
         if self._task is None:
             return
         self._task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._task
-        except asyncio.CancelledError:
-            pass
         self._task = None
 
     async def _run(self) -> None:
         while not self._stop_event.is_set():
             await self.refresh()
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop_event.wait(), timeout=self.settings.poll_interval_seconds)
-            except asyncio.TimeoutError:
-                pass

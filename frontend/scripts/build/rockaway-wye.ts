@@ -14,7 +14,7 @@
 
 const DEG_LAT_M = 111320;
 
-import type { Feature, LineStringGeometry, Position } from "./types.ts";
+import type { LineStringGeometry, Position } from "./types.ts";
 
 type RockawayWyeProperties = {
   corridor_id?: string | null;
@@ -22,10 +22,13 @@ type RockawayWyeProperties = {
   color?: string;
   length_m?: number;
   rockaway_wye_connected?: boolean;
-  [key: string]: unknown;
 };
 
-type RockawayWyeFeature = Feature<LineStringGeometry, RockawayWyeProperties>;
+type RockawayWyeFeature = {
+  type: "Feature";
+  geometry: LineStringGeometry;
+  properties: RockawayWyeProperties;
+};
 
 type RockawayEndpoint = {
   f: RockawayWyeFeature;
@@ -37,6 +40,11 @@ type RockawayWyeSummary = {
   connected: boolean;
   stubsRemoved: number;
   extended: number;
+};
+
+type WyeLegs = {
+  legs: RockawayWyeFeature[];
+  stubs: number[];
 };
 
 // Tight bbox around the wye throat.
@@ -75,55 +83,56 @@ function lineLength(coords: Position[], lat0: number): number {
   return total;
 }
 
-export function connectRockawayWye(features: RockawayWyeFeature[]): RockawayWyeSummary {
-  const lat0 = (WYE_BBOX.minLat + WYE_BBOX.maxLat) / 2;
-
-  // A-features with an endpoint inside the wye bbox.
+function collectWyeLegs(features: RockawayWyeFeature[], lat0: number): WyeLegs {
   const legs: RockawayWyeFeature[] = [];
   const stubs: number[] = [];
-  features.forEach((f, idx) => {
-    if (f?.geometry?.type !== "LineString") return;
-    if (!(f.properties?.route_ids ?? []).includes("A")) return;
-    const cs = f.geometry.coordinates;
+  features.forEach((feature, idx) => {
+    if (feature.geometry?.type !== "LineString") return;
+    if (!(feature.properties?.route_ids ?? []).includes("A")) return;
+    const cs = feature.geometry.coordinates;
     if (!inBbox(cs[0]) && !inBbox(cs[cs.length - 1])) return;
     if (lineLength(cs, lat0) <= STUB_MAX_M) stubs.push(idx);
-    else legs.push(f);
+    else legs.push(feature);
   });
-  if (legs.length < 3) {
-    return { connected: false, stubsRemoved: 0, extended: 0 };
-  }
+  return { legs, stubs };
+}
 
-  // Junction node: the endpoint shared by two of the legs (the east/west
-  // pair touch). Pick the in-bbox endpoint that another leg's endpoint sits
-  // closest to.
+function bboxEndpoints(legs: RockawayWyeFeature[]): RockawayEndpoint[] {
   const endpoints: RockawayEndpoint[] = [];
-  for (const f of legs) {
-    const cs = f.geometry.coordinates;
+  for (const feature of legs) {
+    const cs = feature.geometry.coordinates;
     const endpointPairs: Array<["start" | "end", Position]> = [
       ["start", cs[0]],
       ["end", cs[cs.length - 1]],
     ];
     for (const [pos, coord] of endpointPairs) {
-      if (inBbox(coord)) endpoints.push({ f, pos, coord });
+      if (inBbox(coord)) endpoints.push({ f: feature, pos, coord });
     }
   }
+  return endpoints;
+}
+
+function sharedWyeNode(endpoints: RockawayEndpoint[], lat0: number): Position | null {
   let node: Position | null = null;
   let bestPair = Infinity;
   for (let i = 0; i < endpoints.length; i += 1) {
     for (let j = i + 1; j < endpoints.length; j += 1) {
       if (endpoints[i].f === endpoints[j].f) continue;
       const d = distM(endpoints[i].coord, endpoints[j].coord, lat0);
-      if (d < bestPair) {
-        bestPair = d;
-        node = endpoints[i].coord;
-      }
+      if (d >= bestPair) continue;
+      bestPair = d;
+      node = endpoints[i].coord;
     }
   }
-  if (!node || bestPair > NODE_TOUCH_M) {
-    return { connected: false, stubsRemoved: 0, extended: 0 };
-  }
+  if (!node || bestPair > NODE_TOUCH_M) return null;
+  return node;
+}
 
-  // Extend short-stopping endpoints onto the node.
+function extendShortWyeLegs(
+  endpoints: RockawayEndpoint[],
+  node: Position,
+  lat0: number,
+): number {
   let extended = 0;
   for (const ep of endpoints) {
     const d = distM(ep.coord, node, lat0);
@@ -132,13 +141,27 @@ export function connectRockawayWye(features: RockawayWyeFeature[]): RockawayWyeS
     if (ep.pos === "end") cs.push([...node]);
     else cs.unshift([...node]);
     ep.f.properties.rockaway_wye_connected = true;
-    if (typeof ep.f.properties.length_m === "number") {
-      ep.f.properties.length_m += d;
-    }
+    const lengthM = ep.f.properties.length_m;
+    if (lengthM !== undefined) ep.f.properties.length_m = lengthM + d;
     extended += 1;
   }
+  return extended;
+}
 
-  // Remove degenerate stubs (descending index order).
+export function connectRockawayWye(features: RockawayWyeFeature[]): RockawayWyeSummary {
+  const lat0 = (WYE_BBOX.minLat + WYE_BBOX.maxLat) / 2;
+  const { legs, stubs } = collectWyeLegs(features, lat0);
+  if (legs.length < 3) {
+    return { connected: false, stubsRemoved: 0, extended: 0 };
+  }
+
+  const endpoints = bboxEndpoints(legs);
+  const node = sharedWyeNode(endpoints, lat0);
+  if (!node) {
+    return { connected: false, stubsRemoved: 0, extended: 0 };
+  }
+
+  const extended = extendShortWyeLegs(endpoints, node, lat0);
   stubs.sort((a, b) => b - a);
   for (const idx of stubs) features.splice(idx, 1);
 

@@ -11,23 +11,21 @@ const M_PER_DEG_LON = 111320 * Math.cos((LAT * Math.PI) / 180);
 const lonAt = (m: number): number => -74 + m / M_PER_DEG_LON;
 
 type TestLineProperties = {
-  route_ids: string[];
+  route_ids?: string[];
   visual_feature_type: string;
   length_m?: number;
-  [key: string]: unknown;
 };
 
 type TestStationProperties = {
   station_id: string;
   name: string;
   route_ids: string[];
-  [key: string]: unknown;
 };
 
 type TestLineFeature = Feature<LineStringGeometry, TestLineProperties>;
 type TestStationFeature = Feature<PointGeometry, TestStationProperties>;
 type TestStationCollection = FeatureCollection<TestStationFeature>;
-type TestTerminal = { route: string; coord: Position };
+type TestTerminal = { route: string; coord?: Position };
 
 function lineFeature(routes: string[], fromM: number, toM: number, step = 50): TestLineFeature {
   const coordinates: Position[] = [];
@@ -321,4 +319,186 @@ test("small overhangs below the threshold are not trimmed", () => {
   });
   assert.equal(summary.trimmedEnds, 0);
   assert.ok(lengthM(features[0]) > 990);
+});
+
+test("terminal overhang is a no-op for empty features and malformed station documents", () => {
+  const emptyFeatures: TestLineFeature[] = [];
+  const first = trimTerminalOverhang({
+    features: emptyFeatures,
+    stations: { type: "FeatureCollection", features: [] },
+  });
+  const second = trimTerminalOverhang({
+    features: emptyFeatures,
+    stations: null,
+  });
+  assert.equal(first.trimmedEnds, 0);
+  assert.equal(first.droppedSpurs, 0);
+  assert.deepEqual(emptyFeatures, []);
+  assert.equal(JSON.stringify(first), JSON.stringify(second));
+
+  const kept = [lineFeature(["A"], 0, 400)];
+  const before = structuredClone(kept[0].geometry.coordinates);
+  trimTerminalOverhang({
+    features: kept,
+    stations: { type: "NotACollection" },
+  });
+  assert.deepEqual(kept[0].geometry.coordinates, before);
+});
+
+test("terminal overhang updates length_m and skips empty-route and non-line features", () => {
+  const kept = lineFeature(["A"], 0, 1000);
+  kept.properties.length_m = 1000;
+  const point = {
+    type: "Feature" as const,
+    properties: { route_ids: ["A"], visual_feature_type: "bundle_lane" },
+    geometry: { type: "Point" as const, coordinates: [lonAt(500), LAT] },
+  };
+  const noRoutes = lineFeature([], 0, 400);
+  // SAFETY: production skips Point geometry and empty route_ids after runtime checks.
+  const features = [kept, point, noRoutes] as TestLineFeature[];
+  const stations: TestStationCollection = {
+    type: "FeatureCollection",
+    features: [station("s1", ["A"], 100), station("s2", ["A"], 700)],
+  };
+  const summary = trimTerminalOverhang({
+    features,
+    stations,
+    terminals: [terminal("A", 100), terminal("A", 700)],
+    options: { graceM: 20, minTrimM: 40 },
+  });
+  assert.equal(summary.trimmedEnds, 2);
+  assert.ok((kept.properties.length_m ?? 0) < 700);
+  assert.equal(features.length, 3);
+  assert.deepEqual(noRoutes.geometry.coordinates[0], [lonAt(0), LAT]);
+});
+
+test("terminal overhang matches SIR aliases and skips malformed station records", () => {
+  const features = [lineFeature(["SI"], 0, 1000)];
+  const stations = {
+    type: "FeatureCollection",
+    features: [
+      null,
+      [1, 2],
+      "skip",
+      { geometry: { coordinates: ["x", 40.7] } },
+      { properties: { route_ids: "SI" } },
+      station("tottenville", ["SIR"], 120),
+      station("st-george", ["SIR"], 780),
+    ],
+  };
+  const summary = trimTerminalOverhang({
+    features,
+    stations,
+    terminals: [terminal("SIR", 120), terminal("SIR", 780)],
+  });
+  assert.equal(summary.trimmedEnds, 2);
+  const len = lengthM(features[0]);
+  assert.ok(len > 600 && len < 720, `expected SIR trim, got ${len}`);
+});
+
+test("terminal overhang ignores zero-length vertices and junction-capture stations", () => {
+  const trunk: TestLineFeature = {
+    type: "Feature",
+    properties: { route_ids: ["A"], visual_feature_type: "bundle_lane" },
+    geometry: {
+      type: "LineString",
+      coordinates: [
+        [lonAt(0), LAT],
+        [lonAt(0), LAT],
+        [lonAt(500), LAT],
+        [lonAt(1000), LAT],
+      ],
+    },
+  };
+  const connector: TestLineFeature = {
+    type: "Feature",
+    properties: { route_ids: ["A"], visual_feature_type: "bundle_lane" },
+    geometry: {
+      type: "LineString",
+      coordinates: [
+        [lonAt(0), LAT],
+        [lonAt(0), LAT + 400 / 111320],
+      ],
+    },
+  };
+  const features = [trunk, connector];
+  const stations: TestStationCollection = {
+    type: "FeatureCollection",
+    features: [
+      station("s1", ["A"], 80),
+      station("s2", ["A"], 900),
+      station("off-junction", ["A"], 0, 80),
+    ],
+  };
+  trimTerminalOverhang({
+    features,
+    stations,
+    terminals: [terminal("A", 80), terminal("A", 900)],
+  });
+  assert.equal(features.length, 2);
+  assert.ok(Math.abs(trunk.geometry.coordinates[0][0] - lonAt(0)) < 1e-6 || lengthM(trunk) > 400);
+});
+
+test("terminal overhang skips terminals whose coordinates are missing", () => {
+  const features = [lineFeature(["A"], 0, 1000)];
+  const stations: TestStationCollection = {
+    type: "FeatureCollection",
+    features: [station("s1", ["A"], 100), station("s2", ["A"], 700)],
+  };
+  const summary = trimTerminalOverhang({
+    features,
+    stations,
+    terminals: [{ route: "A" }],
+  });
+  assert.equal(summary.trimmedEnds, 0);
+  assert.ok(lengthM(features[0]) > 990);
+});
+
+test("terminal overhang expands unknown routes, skips a far neighbor, and uses default grace", () => {
+  const kept = lineFeature(["Z"], 0, 1000);
+  const far = lineFeature(["Z"], 5000, 6000);
+  const noIds = lineFeature(["A"], 0, 400);
+  delete noIds.properties.route_ids;
+  const features = [kept, far, noIds];
+  const stations: TestStationCollection = {
+    type: "FeatureCollection",
+    features: [station("s1", ["Z"], 120), station("s2", ["Z"], 780)],
+  };
+  const summary = trimTerminalOverhang({
+    features,
+    stations,
+    terminals: [terminal("Z", 120), terminal("Z", 780)],
+    options: { minTrimM: 40 },
+  });
+  assert.equal(summary.trimmedEnds, 2);
+  assert.ok(lengthM(kept) < 900);
+  assert.ok(lengthM(far) > 990);
+  assert.deepEqual(noIds.geometry.coordinates[0], [lonAt(0), LAT]);
+});
+
+test("garbage station documents and child entries never trim a lane", () => {
+  const features = [lineFeature(["A"], 0, 1000)];
+  const original = features[0].geometry.coordinates.map((coord) => [...coord]);
+  const skipped = [
+    trimTerminalOverhang({ features, stations: null, terminals: [terminal("A", 100)] }),
+    trimTerminalOverhang({ features, stations: [], terminals: [terminal("A", 100)] }),
+    trimTerminalOverhang({
+      features,
+      stations: {
+        type: "FeatureCollection",
+        features: [
+          null,
+          12,
+          {
+            type: "Feature",
+            geometry: { type: "Point", coordinates: "bad" },
+            properties: { route_ids: "A" },
+          },
+        ],
+      },
+      terminals: [terminal("A", 100)],
+    }),
+  ];
+  assert.equal(skipped.every((summary) => summary.trimmedEnds === 0), true);
+  assert.deepEqual(features[0].geometry.coordinates, original);
 });

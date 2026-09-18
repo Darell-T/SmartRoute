@@ -7,11 +7,9 @@ import unittest
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
-from evaluation.route_intelligence import advisor as ai_advisor
-from app.services.agent import loop as agent_loop
-from app.services.agent.turn import stream as turn_stream
 from app.services.agent.model import policy
 from app.services.agent.model import request as model_request
+from app.services.agent.turn import stream as turn_stream
 from app.services.agent.turn.contract import (
     GoalKind,
     GoalState,
@@ -19,16 +17,46 @@ from app.services.agent.turn.contract import (
     TurnContract,
 )
 from app.services.agent.turn.evidence import TurnEvidence
+from evaluation.route_intelligence import advisor as ai_advisor
+
+
+def _clear_env(*keys: str) -> None:
+    for key in keys:
+        os.environ.pop(key, None)
+
+
+class _EmptyAdvisorStream:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    @property
+    def text_stream(self):
+        return self._text()
+
+    async def _text(self):
+        for _chunk in ():
+            yield _chunk
+
+
+def _capturing_stream(captured: dict):
+    @asynccontextmanager
+    async def fake_stream(**kwargs):
+        captured.update(kwargs)
+        yield _EmptyAdvisorStream()
+
+    return fake_stream
 
 
 class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
     def test_auto_defaults_to_sonnet_5(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
-            for key in ("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL"):
-                os.environ.pop(key, None)
+            _clear_env("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL")
             automatic = policy.policy_for_mode("auto")
-        self.assertEqual(automatic.model, "claude-sonnet-5")
-        self.assertEqual(automatic.mode, "auto")
+        assert automatic.model == "claude-sonnet-5"
+        assert automatic.mode == "auto"
 
     def test_agent_auto_model_overrides_default(self) -> None:
         with patch.dict(
@@ -37,136 +65,104 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             automatic = policy.policy_for_mode("auto")
-        self.assertEqual(automatic.model, "claude-sonnet-4-5-20250929")
+        assert automatic.model == "claude-sonnet-4-5-20250929"
 
     def test_quick_uses_the_same_sonnet_model(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
-            for key in ("AGENT_QUICK_MODEL", "AGENT_HAIKU_MODEL"):
-                os.environ.pop(key, None)
+            _clear_env("AGENT_QUICK_MODEL", "AGENT_HAIKU_MODEL")
             quick = policy.policy_for_mode("quick")
-        self.assertEqual(quick.model, "claude-sonnet-5")
-        self.assertNotIn("haiku", quick.model.casefold())
+        assert quick.model == "claude-sonnet-5"
+        assert "haiku" not in quick.model.casefold()
 
     def test_auto_outer_request_uses_sonnet_5_without_unsupported_fields(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
-            for key in ("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL"):
-                os.environ.pop(key, None)
+            _clear_env("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL")
             mode = policy.policy_for_mode("auto")
-        tools = agent_loop._tools_for_state(mode)
-        kwargs = agent_loop._build_stream_kwargs(
+        tools = model_request.tools_for_state(mode)
+        kwargs = model_request.build_stream_kwargs(
             messages=[{"role": "user", "content": "shape-only"}],
             system_blocks=[{"type": "text", "text": "system"}],
             mode_policy=mode,
             tools=tools,
         )
-        self.assertEqual(kwargs["model"], "claude-sonnet-5")
-        self.assertEqual(kwargs["max_tokens"], mode.max_output_tokens)
-        self.assertEqual(kwargs["output_config"], {"effort": "medium"})
-        self.assertNotIn("thinking", kwargs)
-        self.assertNotIn("temperature", kwargs)
-        self.assertNotIn("top_p", kwargs)
-        self.assertNotIn("top_k", kwargs)
-        self.assertEqual(kwargs.get("tool_choice"), {"type": "any"})
-        self.assertIn("tools", kwargs)
+        assert kwargs["model"] == "claude-sonnet-5"
+        assert kwargs["max_tokens"] == mode.max_output_tokens
+        assert kwargs["output_config"] == {"effort": "medium"}
+        assert "thinking" not in kwargs
+        assert "temperature" not in kwargs
+        assert "top_p" not in kwargs
+        assert "top_k" not in kwargs
+        assert kwargs.get("tool_choice") == {"type": "any"}
+        assert "tools" in kwargs
         # Presenter tools are state-valid only after provider evidence exists;
         # the initial request exposes the declaration, capabilities, and
         # terminal tool.
-        self.assertEqual(len(kwargs["tools"]), 5)
-        self.assertEqual(
-            {tool.get("name") for tool in kwargs["tools"] if tool.get("type") != "web_search_20250305"},
-            {
-                "declare_goals",
-                "discover_places",
-                "check_transit",
-                "prepare_route_options",
-                "complete_turn",
-            },
-        )
-        self.assertEqual(mode.explanation_style, "comparative")
+        assert len(kwargs["tools"]) == 5
+        assert {tool.get("name") for tool in kwargs["tools"] if tool.get("type") != "web_search_20250305"} == {"declare_goals", "discover_places", "check_transit", "prepare_route_options", "complete_turn"}
+        assert mode.explanation_style == "comparative"
         diagnostics = model_request.request_diagnostics(kwargs)
-        self.assertIn("model=claude-sonnet-5", diagnostics)
-        self.assertIn("thinking_supplied=0", diagnostics)
-        self.assertNotIn("shape-only", diagnostics)
+        assert "model=claude-sonnet-5" in diagnostics
+        assert "thinking_supplied=0" in diagnostics
+        assert "shape-only" not in diagnostics
 
     async def test_auto_advisor_sdk_kwargs_use_sonnet_5_without_unsupported_fields(self) -> None:
         """Assert final Anthropic stream kwargs for the route-selection advisor."""
         with patch.dict(os.environ, {}, clear=False):
-            for key in ("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL"):
-                os.environ.pop(key, None)
+            _clear_env("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL")
             mode = policy.policy_for_mode("auto")
 
         captured: dict = {}
-
-        @asynccontextmanager
-        async def fake_stream(**kwargs):
-            captured.update(kwargs)
-
-            class _Stream:
-                async def __aenter__(self):
-                    return self
-
-                async def __aexit__(self, *args):
-                    return False
-
-                @property
-                def text_stream(self):
-                    return self._text()
-
-                async def _text(self):
-                    for chunk in ():
-                        yield chunk
-
-            yield _Stream()
-
         with (
             patch.dict(
                 os.environ,
                 {"JARVIS_MOCK_ADVISOR": "0", "SMARTROUTE_ENV": "test"},
                 clear=False,
             ),
-            patch.object(ai_advisor.client.messages, "stream", side_effect=fake_stream),
+            patch.object(
+                ai_advisor.client.messages,
+                "stream",
+                side_effect=_capturing_stream(captured),
+            ),
         ):
-            chunks = []
-            async for chunk in ai_advisor.stream_agent_recommendation(
+            async for _chunk in ai_advisor.stream_agent_recommendation(
                 {"routes": [{"summary": "shape-only"}]},
                 model=mode.model,
                 explanation_style=mode.explanation_style,
             ):
-                chunks.append(chunk)
+                pass
 
-        self.assertEqual(captured["model"], "claude-sonnet-5")
-        self.assertEqual(captured["max_tokens"], 512)
-        self.assertNotIn("thinking", captured)
-        self.assertNotIn("temperature", captured)
-        self.assertNotIn("top_p", captured)
-        self.assertNotIn("top_k", captured)
-        self.assertNotIn("tools", captured)
-        self.assertNotIn("tool_choice", captured)
-        self.assertIn("messages", captured)
-        self.assertIn("system", captured)
+        assert captured["model"] == "claude-sonnet-5"
+        assert captured["max_tokens"] == 512
+        assert "thinking" not in captured
+        assert "temperature" not in captured
+        assert "top_p" not in captured
+        assert "top_k" not in captured
+        assert "tools" not in captured
+        assert "tool_choice" not in captured
+        assert "messages" in captured
+        assert "system" in captured
 
     def test_auto_request_structure_otherwise_unchanged(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
-            for key in ("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL"):
-                os.environ.pop(key, None)
+            _clear_env("AGENT_AUTO_MODEL", "AGENT_SONNET_MODEL", "AGENT_MODEL")
             mode = policy.policy_for_mode("auto")
-        self.assertEqual(mode.max_route_candidates, 5)
-        self.assertEqual(mode.retry_count, 1)
-        self.assertEqual(mode.max_output_tokens, 2048)
-        self.assertEqual(mode.output_effort, "medium")
-        self.assertEqual(mode.max_rounds, 5)
-        self.assertTrue(mode.optional_enrichment)
+        assert mode.max_route_candidates == 5
+        assert mode.retry_count == 1
+        assert mode.max_output_tokens == 2048
+        assert mode.output_effort == "medium"
+        assert mode.max_rounds == 5
+        assert mode.optional_enrichment
 
     def test_initial_request_requires_goal_declaration_without_disabling_parallel_calls(self) -> None:
         mode = policy.policy_for_mode("auto")
         evidence = TurnEvidence()
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
         )
 
-        kwargs = agent_loop._build_stream_kwargs(
+        kwargs = model_request.build_stream_kwargs(
             messages=[{"role": "user", "content": "shape-only"}],
             system_blocks=[{"type": "text", "text": "system"}],
             mode_policy=mode,
@@ -174,11 +170,8 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
             request_options=request_options,
         )
 
-        self.assertEqual(
-            kwargs["tool_choice"],
-            {"type": "tool", "name": "declare_goals"},
-        )
-        self.assertNotIn("disable_parallel_tool_use", kwargs)
+        assert kwargs["tool_choice"] == {"type": "tool", "name": "declare_goals"}
+        assert "disable_parallel_tool_use" not in kwargs
 
     def test_post_declaration_request_keeps_any_tool_choice(self) -> None:
         mode = policy.policy_for_mode("auto")
@@ -186,13 +179,13 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
         evidence.bind_contract(
             TurnContract((OutcomeGoal("response", GoalKind.GENERAL_RESPONSE),))
         )
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
         )
 
-        kwargs = agent_loop._build_stream_kwargs(
+        kwargs = model_request.build_stream_kwargs(
             messages=[{"role": "user", "content": "shape-only"}],
             system_blocks=[{"type": "text", "text": "system"}],
             mode_policy=mode,
@@ -200,8 +193,8 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
             request_options=request_options,
         )
 
-        self.assertEqual(kwargs["tool_choice"], {"type": "any"})
-        self.assertNotIn("disable_parallel_tool_use", kwargs)
+        assert kwargs["tool_choice"] == {"type": "any"}
+        assert "disable_parallel_tool_use" not in kwargs
 
     def test_single_ready_result_requires_its_canonical_presenter(self) -> None:
         mode = policy.policy_for_mode("auto")
@@ -214,16 +207,13 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
             GoalState.EVIDENCE_READY,
             attempted=True,
         )
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
         )
 
-        self.assertEqual(
-            request_options,
-            {"tool_choice": {"type": "tool", "name": "present_places"}},
-        )
+        assert request_options == {"tool_choice": {"type": "tool", "name": "present_places"}}
 
     def test_multiple_ready_results_leave_presenter_order_to_model(self) -> None:
         mode = policy.policy_for_mode("auto")
@@ -242,13 +232,13 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
                 GoalState.EVIDENCE_READY,
                 attempted=True,
             )
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
         )
 
-        self.assertEqual(request_options, {})
+        assert request_options == {}
 
     def test_ready_result_with_pending_goal_does_not_force_presenter(self) -> None:
         mode = policy.policy_for_mode("auto")
@@ -266,13 +256,13 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
             GoalState.EVIDENCE_READY,
             attempted=True,
         )
-        tools = agent_loop._tools_for_state(mode, turn_evidence=evidence)
+        tools = model_request.tools_for_state(mode, turn_evidence=evidence)
         request_options = turn_stream._initial_goal_request_options(
             evidence,
             frozenset(tool["name"] for tool in tools),
         )
 
-        self.assertEqual(request_options, {})
+        assert request_options == {}
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import type maplibregl from "maplibre-gl";
+import type * as maplibregl from "maplibre-gl";
 
 // Render 3D buildings in MapLibre's native GL pass. A separate interleaved
 // tile and tessellation pipeline adds per-frame work during pan. Native
@@ -91,13 +91,5 @@ export function ensureBuildingsLayer(map: maplibregl.Map, beforeId?: string) {
     );
   } else if (beforeId && map.getLayer(beforeId)) {
     map.moveLayer(BUILDINGS_LAYER_ID, beforeId);
-  }
-}
-
-function setBuildingsHidden(map: maplibregl.Map, hidden: boolean) {
-  if (!map.getLayer(BUILDINGS_LAYER_ID)) return;
-  const visibility = hidden ? "none" : "visible";
-  if (map.getLayoutProperty(BUILDINGS_LAYER_ID, "visibility") !== visibility) {
-    map.setLayoutProperty(BUILDINGS_LAYER_ID, "visibility", visibility);
   }
 }

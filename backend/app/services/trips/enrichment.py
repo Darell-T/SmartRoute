@@ -5,9 +5,12 @@ intermediate stop names + coordinates. Strictly fail-open per leg.
 """
 
 import asyncio
+import logging
 import os
 
 from app.services.mta.bus import fetch_bus_route_stop_groups, slice_route_stops
+
+_LOGGER = logging.getLogger(__name__)
 
 # The per-leg GTFS stop enrichment runs a GROUP BY over all of a route's
 # stop_times on a remote Postgres; 1.25s was too tight and timed out, dropping
@@ -31,10 +34,29 @@ async def _enrich_subway_step_with_gtfs(gtfs, step: dict) -> list[dict]:
     )
 
 
+def _select_subway_located_stops(step: dict, result: object) -> list[dict]:
+    if isinstance(result, asyncio.TimeoutError):
+        _LOGGER.warning(
+            "[trip] subway stop enrichment timed out (%s, %.2fs)",
+            step.get("route_id"),
+            TRIP_GTFS_ENRICH_TIMEOUT_S,
+        )
+        return []
+    if isinstance(result, BaseException):
+        _LOGGER.warning(
+            "[trip] subway stop enrichment skipped (%s): %s",
+            step.get("route_id"),
+            result,
+        )
+        return []
+    return list(result)
+
+
 async def _enrich_subway_legs(gtfs, steps: list[dict]) -> dict:
-    """Enrich the SUBWAY steps of a single route in place (intermediate stop
-    names + coordinates). Parallel, cached, strictly fail-open per leg. Returns
-    {"legs": n, "with_stops": k}."""
+    """Enrich SUBWAY steps in place with intermediate stop names and coordinates.
+
+    Parallel, cached, and strictly fail-open per leg.
+    """
     subway_steps = [s for s in steps if s.get("type") == "SUBWAY"]
     metrics = {"legs": len(subway_steps), "with_stops": 0}
     for step in subway_steps:
@@ -46,39 +68,47 @@ async def _enrich_subway_legs(gtfs, steps: list[dict]) -> dict:
         *(_enrich_subway_step_with_gtfs(gtfs, step) for step in subway_steps),
         return_exceptions=True,
     )
-    for step, result in zip(subway_steps, results):
-        if isinstance(result, asyncio.TimeoutError):
-            print(
-                f"[trip] subway stop enrichment timed out "
-                f"({step.get('route_id')}, {TRIP_GTFS_ENRICH_TIMEOUT_S:.2f}s)"
-            )
-            located = []
-        elif isinstance(result, BaseException):
-            print(f"[trip] subway stop enrichment skipped ({step.get('route_id')}): {result}")
-            located = []
-        else:
-            located = result
+    for step, result in zip(subway_steps, results, strict=False):
+        located = _select_subway_located_stops(step, result)
         step["intermediate_stop_locations"] = located
         step["intermediate_stops"] = [s["name"] for s in located]
         if located:
             metrics["with_stops"] += 1
-        else:
-            print(
-                "[trip] subway leg has no intermediate stops "
-                f"({step.get('route_id')}: {step.get('departure_stop')} "
-                f"-> {step.get('arrival_stop')})"
-            )
+            continue
     return metrics
 
 
-async def _enrich_bus_legs(steps: list[dict]) -> dict:
-    """Enrich the BUS steps of a single route in place via OneBusAway
-    stops-for-route. Strictly fail-open. Returns {"legs": n, "with_stops": k}."""
-    bus_steps = [s for s in steps if s.get("type") == "BUS"]
-    metrics = {"legs": len(bus_steps), "with_stops": 0}
+def _select_bus_steps(steps: list[dict]) -> list[dict]:
+    bus_steps = [step for step in steps if step.get("type") == "BUS"]
     for step in bus_steps:
         step.setdefault("intermediate_stops", [])
         step.setdefault("intermediate_stop_locations", [])
+    return bus_steps
+
+
+def _parse_bus_groups_by_route(route_ids: list[str], results: list) -> dict:
+    return {
+        rid: result
+        for rid, result in zip(route_ids, results, strict=False)
+        if isinstance(result, dict)
+    }
+
+
+def _select_bus_leg_stops(step: dict, groups_by_route: dict) -> list:
+    parsed_groups = groups_by_route.get(step["route_id"])
+    if not parsed_groups:
+        return []
+    return slice_route_stops(
+        parsed_groups,
+        step.get("departure_coords") or {},
+        step.get("arrival_coords") or {},
+    )
+
+
+async def _enrich_bus_legs(steps: list[dict]) -> dict:
+    """Enrich BUS steps in place via OneBusAway stops-for-route. Strictly fail-open."""
+    bus_steps = _select_bus_steps(steps)
+    metrics = {"legs": len(bus_steps), "with_stops": 0}
     bus_route_ids = sorted({s["route_id"] for s in bus_steps if s.get("route_id")})
     if not bus_route_ids:
         return metrics
@@ -87,30 +117,20 @@ async def _enrich_bus_legs(steps: list[dict]) -> dict:
             *(fetch_bus_route_stop_groups(rid) for rid in bus_route_ids),
             return_exceptions=True,
         )
-        groups_by_route = {
-            rid: result
-            for rid, result in zip(bus_route_ids, results)
-            if isinstance(result, dict)
-        }
+        groups_by_route = _parse_bus_groups_by_route(bus_route_ids, results)
         for step in bus_steps:
-            parsed_groups = groups_by_route.get(step["route_id"])
-            if not parsed_groups:
+            located = _select_bus_leg_stops(step, groups_by_route)
+            if not located:
                 continue
-            located = slice_route_stops(
-                parsed_groups,
-                step.get("departure_coords") or {},
-                step.get("arrival_coords") or {},
-            )
-            if located:
-                step["intermediate_stop_locations"] = located
-                step["intermediate_stops"] = [s["name"] for s in located]
-                metrics["with_stops"] += 1
-    except Exception as exc:
-        print(f"[trip] bus stop enrichment skipped: {exc}")
+            step["intermediate_stop_locations"] = located
+            step["intermediate_stops"] = [s["name"] for s in located]
+            metrics["with_stops"] += 1
+    except Exception as exc:  # noqa: BLE001 bus-stop enrichment faults skip intermediates
+        _LOGGER.warning("[trip] bus stop enrichment skipped: %s", exc)
     return metrics
 
 
-async def _enrich_route(gtfs, route: list[dict]) -> dict:
+async def enrich_route(gtfs, route: list[dict]) -> dict:
     """Enrich one route's SUBWAY + BUS legs in place. Returns leg metrics."""
     sub = await _enrich_subway_legs(gtfs, route)
     bus = await _enrich_bus_legs(route)

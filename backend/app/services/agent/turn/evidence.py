@@ -10,6 +10,10 @@ from typing import Any, Literal
 
 from app.services.agent.turn.contract import GoalKind, GoalState, TurnContract
 
+_RESOLVED_GOAL_STATES = frozenset(
+    {GoalState.SATISFIED, GoalState.CANCELLED_BY_RIDER, GoalState.SUPERSEDED}
+)
+
 TerminalPath = Literal[
     "complete_turn",
     "present_places",
@@ -20,6 +24,39 @@ TerminalPath = Literal[
     "",
 ]
 SelectionSource = Literal["model", "deterministic_fallback", ""]
+
+
+def _apply_goal_flag(flags: set[str], key: str, enabled: bool | None) -> None:
+    if enabled is True:
+        flags.add(key)
+    elif enabled is False:
+        flags.discard(key)
+
+
+def _normalized_recovery_options(options: tuple[str, ...]) -> tuple[str, ...]:
+    cleaned = tuple(
+        option.strip()
+        for option in options
+        if isinstance(option, str) and option.strip()
+    )
+    return tuple(dict.fromkeys(cleaned))
+
+
+def _route_internal_discovery_ready(
+    contract: TurnContract | None,
+    goal_key: str,
+    *,
+    ok: bool,
+    has_places: bool,
+    handle: str,
+) -> bool:
+    return (
+        ok
+        and has_places
+        and bool(handle)
+        and contract is not None
+        and contract.route_allows_internal_discovery(goal_key)
+    )
 
 
 @dataclasses.dataclass
@@ -79,20 +116,11 @@ class TurnEvidence:
         normalized = state if isinstance(state, GoalState) else GoalState(str(state))
         previous = self.goal_states.get(key, GoalState.PENDING)
         self.goal_states[key] = normalized
-        if attempted is True:
-            self.goal_attempted.add(key)
-        elif attempted is False:
-            self.goal_attempted.discard(key)
-        if presented is True:
-            self.goal_presented.add(key)
-        elif presented is False:
-            self.goal_presented.discard(key)
-        options = tuple(
-            option.strip()
-            for option in approved_recovery_options
-            if isinstance(option, str) and option.strip()
+        _apply_goal_flag(self.goal_attempted, key, attempted)
+        _apply_goal_flag(self.goal_presented, key, presented)
+        self.goal_recovery_options[key] = _normalized_recovery_options(
+            approved_recovery_options
         )
-        self.goal_recovery_options[key] = tuple(dict.fromkeys(options))
         if previous != normalized:
             self.goal_transitions.append(
                 {
@@ -126,6 +154,12 @@ class TurnEvidence:
 
     def presented_for(self, goal_key: str) -> bool:
         return str(goal_key) in self.goal_presented
+
+    def goal_is_unresolved(self, goal_key: str) -> bool:
+        state = self.state_for(goal_key)
+        if state in _RESOLVED_GOAL_STATES:
+            return False
+        return not (state == GoalState.EVIDENCE_READY and self.presented_for(goal_key))
 
     def recovery_options_for(self, goal_key: str) -> tuple[str, ...]:
         return self.goal_recovery_options.get(str(goal_key), ())
@@ -198,6 +232,7 @@ class TurnEvidence:
     ) -> None:
         if ok:
             self.transit_evidence = True
+        _ = (operation, data)
 
     def note_web(self, *, ok: bool) -> None:
         self.web_used = True
@@ -298,14 +333,13 @@ class TurnEvidence:
             operation=str(payload.get("operation") or "search"),
         )
         discovery_handle = str(payload.get("discovery_set_id") or "").strip()
-        route_discovery_ready = (
-            ok
-            and has_places
-            and bool(discovery_handle)
-            and self.turn_contract is not None
-            and self.turn_contract.route_allows_internal_discovery(goal_key)
-        )
-        if route_discovery_ready:
+        if _route_internal_discovery_ready(
+            self.turn_contract,
+            goal_key,
+            ok=ok,
+            has_places=has_places,
+            handle=discovery_handle,
+        ):
             self.goal_handles.pop(goal_key, None)
             self.record_goal(
                 goal_key,

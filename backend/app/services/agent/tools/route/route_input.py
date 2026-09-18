@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.agent import trip_state as trip_state_module
-from app.services.agent.tools._types import ToolContext
+from app.services.agent.tools.base import ToolContext
 from app.services.trips.location import ResolvedPlace
 from app.services.trips.preparation.input import (
     derive_arrive_by_departure,
+    normalize_route_ids,
     parse_rfc3339,
     point_label,
     prepare_structural_candidates,
@@ -17,8 +18,6 @@ from app.services.trips.preparation.input import (
     summary_eta_minutes,
     validated_waypoints,
 )
-from app.services.trips.preparation.input import normalize_route_ids
-
 
 _RIDER_LOCATION_REFERENCES = {"user", "your location", "current location"}
 
@@ -36,56 +35,29 @@ def merge_route_preparation_input(tool_input: dict, ctx: ToolContext) -> dict:
     session = ctx.session if isinstance(ctx.session, dict) else {}
     state = trip_state_module.get_trip_state(session)
     preferences = state.get("preferences") or {}
-    destination_source = str(tool_input.get("destination_source") or "").strip()
-    destination = str(tool_input.get("destination") or "").strip()
-    if not destination and destination_source == "accepted_trip":
-        destination = str(state.get("destination") or "").strip()
-    requested_preference = tool_input.get("routing_preference")
-    if requested_preference in {"FEWER_TRANSFERS", "LESS_WALKING"}:
-        routing_preference, routing_preference_source = requested_preference, "current_turn"
-    elif preferences.get("walking_preference") == "less_walking":
-        routing_preference, routing_preference_source = "LESS_WALKING", "persisted_rider"
-    elif preferences.get("prefer_fewer_transfers") is True:
-        routing_preference, routing_preference_source = "FEWER_TRANSFERS", "persisted_rider"
-    else:
-        routing_preference, routing_preference_source = "FEWER_TRANSFERS", "default"
+    routing_preference, routing_preference_source = _routing_preference(
+        tool_input, preferences
+    )
     avoid_crowds = _explicit_bool(tool_input, "avoid_crowds", preferences)
-    avoid_crowds_source = (
-        "current_turn"
-        if "avoid_crowds" in tool_input
-        else "persisted_rider"
-        if preferences.get("avoid_crowds") is True
-        else "default"
-    )
     avoid_stairs = _explicit_bool(tool_input, "avoid_stairs", preferences)
-    accessibility_required = (
-        _explicit_bool(tool_input, "accessibility_required", preferences)
-        if "accessibility_required" in tool_input
-        else bool(preferences.get("accessibility_required"))
-    )
-    accessibility_required |= avoid_stairs
     merged: dict[str, Any] = {
         "origin": _canonical_origin_reference(
             tool_input.get("origin") or state.get("origin") or "user"
         ),
-        "destination": destination,
-        "destination_source": destination_source,
-        "waypoints": [
-            str(value).strip()
-            for value in (
-                tool_input.get("waypoints")
-                if isinstance(tool_input.get("waypoints"), list)
-                else state.get("waypoints") or []
-            )
-            if str(value).strip()
-        ],
+        "destination": _merged_destination(tool_input, state),
+        "destination_source": str(tool_input.get("destination_source") or "").strip(),
+        "waypoints": _merged_waypoints(tool_input, state),
         **_mode_preferences(tool_input, preferences),
         "routing_preference": routing_preference,
         "routing_preference_source": routing_preference_source,
         "avoid_crowds": avoid_crowds,
-        "avoid_crowds_source": avoid_crowds_source,
+        "avoid_crowds_source": _turn_or_persisted_source(
+            tool_input, "avoid_crowds", preferences
+        ),
         "avoid_stairs": avoid_stairs,
-        "accessibility_required": accessibility_required,
+        "accessibility_required": _merged_accessibility_required(
+            tool_input, preferences, avoid_stairs
+        ),
     }
     for key in (
         "departure_time",
@@ -109,13 +81,71 @@ def merge_route_preparation_input(tool_input: dict, ctx: ToolContext) -> dict:
     merged["preference_patch"] = trip_state_module.preference_patch_from_tool_input(
         tool_input
     )
-    if isinstance(ctx.session, dict) and merged["scenario"] == "active":
-        if merged["preference_patch"]:
-            trip_state_module.apply_preference_patch(
-                ctx.session,
-                merged["preference_patch"],
-            )
+    _apply_active_preference_patch(ctx, merged)
     return merged
+
+
+def _merged_destination(tool_input: dict, state: dict[str, Any]) -> str:
+    destination = str(tool_input.get("destination") or "").strip()
+    if destination or str(tool_input.get("destination_source") or "").strip() != "accepted_trip":
+        return destination
+    return str(state.get("destination") or "").strip()
+
+
+def _merged_waypoints(tool_input: dict, state: dict[str, Any]) -> list[str]:
+    raw = (
+        tool_input.get("waypoints")
+        if isinstance(tool_input.get("waypoints"), list)
+        else state.get("waypoints") or []
+    )
+    return [str(value).strip() for value in raw if str(value).strip()]
+
+
+def _routing_preference(
+    tool_input: dict, preferences: dict[str, Any]
+) -> tuple[str, str]:
+    requested = tool_input.get("routing_preference")
+    if requested in {"FEWER_TRANSFERS", "LESS_WALKING"}:
+        return requested, "current_turn"
+    if preferences.get("walking_preference") == "less_walking":
+        return "LESS_WALKING", "persisted_rider"
+    if preferences.get("prefer_fewer_transfers") is True:
+        return "FEWER_TRANSFERS", "persisted_rider"
+    return "FEWER_TRANSFERS", "default"
+
+
+def _turn_or_persisted_source(
+    tool_input: dict, key: str, preferences: dict[str, Any]
+) -> str:
+    if key in tool_input:
+        return "current_turn"
+    if preferences.get(key) is True:
+        return "persisted_rider"
+    return "default"
+
+
+def _merged_accessibility_required(
+    tool_input: dict, preferences: dict[str, Any], avoid_stairs: bool
+) -> bool:
+    required = (
+        _explicit_bool(tool_input, "accessibility_required", preferences)
+        if "accessibility_required" in tool_input
+        else bool(preferences.get("accessibility_required"))
+    )
+    return required or avoid_stairs
+
+
+def _apply_active_preference_patch(ctx: ToolContext, merged: dict[str, Any]) -> None:
+    if not isinstance(ctx.session, dict):
+        return
+    if merged["scenario"] != "active":
+        return
+    if not merged["preference_patch"]:
+        return
+    trip_state_module.apply_preference_patch(
+        ctx.session,
+        merged["preference_patch"],
+    )
 
 
 def _apply_persisted_trip_constraints(

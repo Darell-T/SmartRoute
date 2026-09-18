@@ -10,14 +10,21 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from app.services.agent import events as agent_events
-from app.services.agent.passenger_output import pop_activity_label
-from app.services.agent.model import policy as agent_policy
 from app.services.agent import public_surface
 from app.services.agent import session as session_module
+from app.services.agent.model import policy as agent_policy
+from app.services.agent.model.output_projection import project_tool_result_data
+from app.services.agent.passenger_output import pop_activity_label
 from app.services.agent.tool_input_policy import (
     authoritative_discovery_input as _authoritative_discovery_input,
+)
+from app.services.agent.tool_input_policy import (
     constrained_tool_input,
+)
+from app.services.agent.tool_input_policy import (
     goal_error as _goal_error,
+)
+from app.services.agent.tool_input_policy import (
     missing_verified_destination as _missing_verified_destination,
 )
 from app.services.agent.tools import ToolContext, ToolResult
@@ -27,10 +34,19 @@ from app.services.agent.turn.ledger import (
     TurnToolLedger,
     run_one_tool,
 )
-from app.services.agent.model.output_projection import project_tool_result_data
 
-class TurnDeadlineReached(Exception):
+
+class TurnDeadlineReachedError(Exception):
     """Internal control flow that still reaches the turn's single DoneEvent."""
+
+
+@dataclass(frozen=True)
+class ToolRoundResultMessage:
+    role: str
+    content: object
+    deadline_reached: bool
+    tool_outcomes: tuple[tuple[str, dict, object], ...]
+
 
 _UNOFFERED_TOOL_ERROR = "tool not offered on this turn"
 _TERMINAL_TOOLS = frozenset({"complete_turn"})
@@ -194,6 +210,33 @@ class _ToolRoundExecution:
                 return reason
         return _missing_verified_destination(name, tool_input, self.ctx)
 
+    def _resolve_execution_key(
+        self,
+        name: str,
+        tool_input: dict,
+        presentation_keys: dict[tuple[str, str], str],
+    ) -> str:
+        identity = _presentation_identity(name, tool_input)
+        key = presentation_keys.get(identity) if identity is not None else None
+        if key is None:
+            key = self.ledger.key(name, tool_input)
+            if identity is not None:
+                presentation_keys[identity] = key
+        return key
+
+    def _admit_cached_or_pending(
+        self, block, name: str, tool_input: dict, key: str
+    ) -> None:
+        if block.id in self.declaration_results:
+            self.outcomes_by_key[key] = self.declaration_results[block.id]
+            return
+        cached = self.ledger.reusable_results.get(key)
+        if cached is not None:
+            self.outcomes_by_key[key] = cached
+            return
+        if key not in self.pending_calls:
+            self.pending_calls[key] = (name, tool_input)
+
     def _plan_calls(self) -> None:
         self.start_times = {block.id: time.monotonic() for block in self.blocks}
         presentation_keys: dict[tuple[str, str], str] = {}
@@ -202,22 +245,10 @@ class _ToolRoundExecution:
                 continue
             name = getattr(block, "name", "")
             tool_input = self.tool_inputs[block.id]
-            identity = _presentation_identity(name, tool_input)
-            key = presentation_keys.get(identity) if identity is not None else None
-            if key is None:
-                key = self.ledger.key(name, tool_input)
-                if identity is not None:
-                    presentation_keys[identity] = key
+            key = self._resolve_execution_key(name, tool_input, presentation_keys)
             self.execution_keys[block.id] = key
             self.first_block_by_key.setdefault(key, block.id)
-            if block.id in self.declaration_results:
-                self.outcomes_by_key[key] = self.declaration_results[block.id]
-                continue
-            cached = self.ledger.reusable_results.get(key)
-            if cached is not None:
-                self.outcomes_by_key[key] = cached
-            elif key not in self.pending_calls:
-                self.pending_calls[key] = (name, tool_input)
+            self._admit_cached_or_pending(block, name, tool_input, key)
 
     async def _execute_calls(self) -> AsyncIterator:
         if not self.pending_calls:
@@ -243,7 +274,7 @@ class _ToolRoundExecution:
             round_task = asyncio.gather(*self.round_tasks.values())
             async for progress in relay.stream_until(round_task):
                 yield progress
-            self.outcomes_by_key.update(zip(self.round_tasks, await round_task))
+            self.outcomes_by_key.update(zip(self.round_tasks, await round_task, strict=False))
         finally:
             if round_task is not None and not round_task.done():
                 round_task.cancel()
@@ -284,22 +315,23 @@ class _ToolRoundExecution:
     async def _surface_results(self) -> AsyncIterator:
         outcomes = self._outcomes()
         content = []
-        for block, result in zip(self.blocks, outcomes):
+        for block, result in zip(self.blocks, outcomes, strict=False):
             result_content, events = self._record_result(block, result)
             content.append(result_content)
             for event in events:
                 yield event
-        yield {
-            "__tool_result_message__": {"role": "user", "content": content},
-            "__deadline_reached__": any(
+        yield ToolRoundResultMessage(
+            role="user",
+            content=content,
+            deadline_reached=any(
                 not result.ok and result.error == "turn deadline reached"
                 for result in outcomes
             ),
-            "__tool_outcomes__": [
+            tool_outcomes=tuple(
                 (block.name, self.tool_inputs[block.id], result)
-                for block, result in zip(self.blocks, outcomes)
-            ],
-        }
+                for block, result in zip(self.blocks, outcomes, strict=False)
+            ),
+        )
 
     def _record_result(self, block, result: ToolResult) -> tuple[dict, list]:
         name = getattr(block, "name", "")

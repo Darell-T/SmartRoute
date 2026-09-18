@@ -8,14 +8,19 @@ inputs. Citation identity rules are reused from the incidents evidence module.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from app.services.incidents.normalization import (
-    bounded_ids, bounded_text, sanitize_source_records,
-)
 from app.services.incidents.evidence import (
-    canonical_citation_url, source_identity_from_url, source_type_matches_url,
+    canonical_citation_url,
+    source_identity_from_url,
+    source_type_matches_url,
+)
+from app.services.incidents.normalization import (
+    bounded_ids,
+    bounded_text,
+    sanitize_source_records,
 )
 
 SIX_HOURS = timedelta(hours=6)
@@ -58,12 +63,12 @@ def observed_at_iso(value: object, *, now: datetime) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.strip())
     except ValueError:
         return None
     if parsed.utcoffset() is None:
         return None
-    observed = parsed.astimezone(timezone.utc)
+    observed = parsed.astimezone(UTC)
     if observed < now - SIX_HOURS or observed > now + FUTURE_SKEW:
         return None
     return observed.isoformat().replace("+00:00", "Z")
@@ -192,6 +197,38 @@ def _source_record(source: str, item: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def _incident_from_claim(
+    claim: Mapping[str, Any],
+    supporting: Sequence[Mapping[str, Any]],
+    *,
+    batch_id: str,
+    now: datetime,
+) -> dict[str, Any]:
+    confirmed = bool(supporting)
+    source_records = [_source_record("x_search", claim)]
+    source_records.extend(_source_record("web_search", item) for item in supporting)
+    return {
+        "state": "confirmed" if confirmed else "unconfirmed",
+        "source": "x_search",
+        "source_id": str(claim.get("source_id", "")),
+        "location_name": claim.get("location", ""),
+        "description": claim.get("description", ""),
+        "severity": claim.get("severity", ""),
+        "impact_scope": claim.get("impact_scope", ""),
+        "observed_at": claim.get("observed_at", ""),
+        "expires_at": now.timestamp()
+        + (_CONFIRMED_TTL_S if confirmed else _UNCONFIRMED_TTL_S),
+        "source_coverage": ["x_search", "web_search"] if confirmed else ["x_search"],
+        "corroboration_state": "corroborated" if confirmed else "uncorroborated",
+        "advisor_eligible": bool(confirmed and claim.get("impact_scope") != "nearby"),
+        "source_records": sanitize_source_records(source_records),
+        "affected_stop_ids": list(claim.get("stop_ids", [])),
+        "affected_route_ids": list(claim.get("route_ids", [])),
+        "affected_corridor_ids": list(claim.get("corridor_ids", [])),
+        "affected_batch_ids": [batch_id],
+    }
+
+
 def build_incident_inputs(
     claims: Sequence[Mapping[str, Any]],
     corroborations: Iterable[Mapping[str, Any]],
@@ -208,33 +245,12 @@ def build_incident_inputs(
     by_ref: dict[str, list[Mapping[str, Any]]] = {}
     for corroboration in corroborations:
         by_ref.setdefault(str(corroboration.get("claim_ref", "")), []).append(corroboration)
-    incidents: list[dict[str, Any]] = []
-    for claim in claims:
-        supporting = by_ref.get(str(claim.get("claim_ref", "")), ())
-        confirmed = bool(supporting)
-        source_records = [_source_record("x_search", claim)]
-        if confirmed:
-            source_records.extend(_source_record("web_search", item) for item in supporting)
-        incidents.append(
-            {
-                "state": "confirmed" if confirmed else "unconfirmed",
-                "source": "x_search",
-                "source_id": str(claim.get("source_id", "")),
-                "location_name": claim.get("location", ""),
-                "description": claim.get("description", ""),
-                "severity": claim.get("severity", ""),
-                "impact_scope": claim.get("impact_scope", ""),
-                "observed_at": claim.get("observed_at", ""),
-                "expires_at": now.timestamp()
-                + (_CONFIRMED_TTL_S if confirmed else _UNCONFIRMED_TTL_S),
-                "source_coverage": ["x_search", "web_search"] if confirmed else ["x_search"],
-                "corroboration_state": "corroborated" if confirmed else "uncorroborated",
-                "advisor_eligible": bool(confirmed and claim.get("impact_scope") != "nearby"),
-                "source_records": sanitize_source_records(source_records),
-                "affected_stop_ids": list(claim.get("stop_ids", [])),
-                "affected_route_ids": list(claim.get("route_ids", [])),
-                "affected_corridor_ids": list(claim.get("corridor_ids", [])),
-                "affected_batch_ids": [batch_id],
-            }
+    return tuple(
+        _incident_from_claim(
+            claim,
+            by_ref.get(str(claim.get("claim_ref", "")), ()),
+            batch_id=batch_id,
+            now=now,
         )
-    return tuple(incidents)
+        for claim in claims
+    )

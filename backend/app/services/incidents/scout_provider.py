@@ -11,15 +11,16 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-try:  # Optional provider; background coverage stays truthful when absent.
+try:
     from xai_sdk import AsyncClient
     from xai_sdk.chat import system, user
     from xai_sdk.tools import get_tool_call_type, web_search, x_search
-except Exception:  # pragma: no cover - exercised by the configured-client path.
+except Exception:  # noqa: BLE001 optional SDK import faults leave scout unavailable
     AsyncClient = None
     system = None
     user = None
@@ -27,14 +28,14 @@ except Exception:  # pragma: no cover - exercised by the configured-client path.
     web_search = None
     x_search = None
 
+from app import runtime
 from app.services.incidents.batches import IncidentBatch
+from app.services.incidents.evidence import canonical_citation_url
 from app.services.incidents.scout_normalization import SIX_HOURS
 from app.services.trips.crowds.search_normalization import response_text
-from app.services.incidents.evidence import canonical_citation_url
 
 _MODEL = os.getenv("XAI_INCIDENT_MODEL", "grok-4-1-fast-reasoning")
 
-# Bounded caps: X 12-claim contract (~150 tokens/claim), Web corroboration (~65 tokens/entry).
 _X_OUTPUT_MAX_TOKENS = 1_800
 _WEB_OUTPUT_MAX_TOKENS = 800
 
@@ -46,13 +47,6 @@ class ScoutSearchResult:
     response_text: str
     citations: tuple[str, ...]
     tool_completed: bool
-
-
-def _bounded_timeout() -> float:
-    try:
-        return min(30.0, max(1.0, float(os.getenv("XAI_INCIDENT_TIMEOUT_S", "12"))))
-    except ValueError:
-        return 12.0
 
 
 _client = None
@@ -77,7 +71,12 @@ def _get_client() -> Any | None:
 
     loop = asyncio.get_running_loop()
     if _client is None:
-        _client = AsyncClient(api_key=api_key, timeout=_bounded_timeout())
+        _client = AsyncClient(
+            api_key=api_key,
+            timeout=runtime.env_float(
+                "XAI_INCIDENT_TIMEOUT_S", 12.0, minimum=1.0, maximum=30.0
+            ),
+        )
         _client_loop = loop
     elif _client_loop is not loop:
         raise RuntimeError("incident scout client used from a different event loop")
@@ -163,54 +162,64 @@ def _batch_context(batch: IncidentBatch) -> str:
     )
 
 
+_CITATION_URL_KEYS = ("url", "href", "source_url", "web_citation", "x_citation")
+_TOOL_CALL_SOURCES = {"x_search_tool": "x_search", "web_search_tool": "web_search"}
+_SEARCH_SOURCES = ("x_search", "web_search")
+
+
+def _citation_urls_from_value(
+    value: object, keys: tuple[str, ...]
+) -> Iterator[str]:
+    if isinstance(value, str):
+        canonical = canonical_citation_url(value)
+        if canonical:
+            yield canonical
+        return
+    if value is None or isinstance(value, (bytes, int, float, bool)):
+        return
+    read = value.get if isinstance(value, Mapping) else lambda key: getattr(value, key, None)
+    for key in keys:
+        yield from _citation_urls_from_value(read(key), keys)
+
+
 def response_citations(response: object) -> tuple[str, ...]:
-    """Canonical, sorted, bounded citation URLs returned by the search tool."""
     urls: set[str] = set()
-    keys = ("url", "href", "source_url", "web_citation", "x_citation")
-
-    def collect(value: object) -> None:
-        if value is None:
-            return
-        if isinstance(value, str):
-            canonical = canonical_citation_url(value)
-            if canonical:
-                urls.add(canonical)
-        elif isinstance(value, Mapping):
-            for key in keys:
-                collect(value.get(key))
-        elif not isinstance(value, (bytes, int, float, bool)):
-            for key in keys:
-                collect(getattr(value, key, None))
-
     for citation in (
         *(getattr(response, "citations", ()) or ()),
         *(getattr(response, "inline_citations", ()) or ()),
     ):
-        collect(citation)
+        urls.update(_citation_urls_from_value(citation, _CITATION_URL_KEYS))
     return tuple(sorted(urls))[:40]
+
+
+def _tool_call_source(call: object) -> str | None:
+    try:
+        call_type = get_tool_call_type(call) if get_tool_call_type else ""
+    except Exception:  # noqa: BLE001 SDK call-type faults treat the tool as incomplete
+        call_type = ""
+    return _TOOL_CALL_SOURCES.get(call_type)
+
+
+def _usage_sources(usage: object) -> set[str]:
+    items = usage if isinstance(usage, (list, tuple, set, dict)) else (usage,)
+    found: set[str] = set()
+    for item in items:
+        text = str(item).casefold()
+        found.update(source for source in _SEARCH_SOURCES if source in text)
+    return found
 
 
 def _completed_sources(response: object) -> set[str]:
     completed: set[str] = set()
     for call in getattr(response, "tool_calls", ()) or ():
-        try:
-            call_type = get_tool_call_type(call) if get_tool_call_type else ""
-        except Exception:
-            call_type = ""
-        if call_type == "x_search_tool":
-            completed.add("x_search")
-        elif call_type == "web_search_tool":
-            completed.add("web_search")
-    usage = getattr(response, "server_side_tool_usage", ()) or ()
-    items = usage if isinstance(usage, (list, tuple, set, dict)) else (usage,)
-    for item in items:
-        text = str(item).casefold()
-        completed.update(source for source in ("x_search", "web_search") if source in text)
+        source = _tool_call_source(call)
+        if source:
+            completed.add(source)
+    completed.update(_usage_sources(getattr(response, "server_side_tool_usage", ()) or ()))
     return completed
 
 
 async def _run_x_search(batch: IncidentBatch, *, now: datetime) -> ScoutSearchResult:
-    """One X-only server-side-tool request for one coarse batch."""
     active_client = _get_client()
     if active_client is None or not all((system, user, x_search)):
         return ScoutSearchResult("", (), False)
@@ -234,9 +243,10 @@ async def _run_x_search(batch: IncidentBatch, *, now: datetime) -> ScoutSearchRe
 async def _run_web_search(
     claims: tuple[dict[str, Any], ...], *, now: datetime
 ) -> ScoutSearchResult:
-    """One Web-only server-side-tool request covering all accepted claims."""
     active_client = _get_client()
     if active_client is None or not all((system, user, web_search)):
+        return ScoutSearchResult("", (), False)
+    if now.tzinfo is None:
         return ScoutSearchResult("", (), False)
     chat = active_client.chat.create(
         model=_MODEL,

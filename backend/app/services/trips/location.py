@@ -91,7 +91,7 @@ _register(
     "Penn Station",
     "NY Penn Station",
     "34 St-Penn Station",
-    "34 St–Penn Station",
+    "34 St\u2013Penn Station",
     "34 St Penn Station",
     "34th Penn Station",
     "34th Street-Penn Station",

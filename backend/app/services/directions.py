@@ -1,12 +1,14 @@
+import logging
 import os
-import httpx
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
+
+import httpx
 
 from app.services.geography import distance_meters
 from app.services.mta.static_gtfs.stop_patterns import normalize_station_name
 
-
+_LOGGER = logging.getLogger(__name__)
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 key = (os.getenv("GOOGLE_ROUTES_API_KEY") or "").strip()
 GOOGLE_ROUTES_TIMEOUT_S = float(os.getenv("GOOGLE_ROUTES_TIMEOUT_S", "12.0"))
@@ -51,7 +53,7 @@ class GoogleRoutesError(RuntimeError):
 def _provider_error_summary(response) -> str:
     try:
         data = response.json()
-    except Exception:
+    except (ValueError, TypeError):
         text = getattr(response, "text", "") or ""
         return " ".join(text.split())[:300]
 
@@ -76,21 +78,20 @@ def _duration_to_minutes(value) -> int | None:
 
 
 def _duration_to_seconds(value) -> int | None:
-    """Parse the provider duration without losing sub-minute precision."""
     if not isinstance(value, str) or not value.endswith("s"):
         return None
     try:
         seconds = float(value[:-1])
     except ValueError:
         return None
-    return max(0, int(round(seconds)))
+    return max(0, round(seconds))
 
 def _serialize_departure_time(value: str | datetime) -> str:
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, str):
         try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(value)
         except ValueError as exc:
             raise GoogleRoutesError(
                 "invalid_departure_time",
@@ -108,7 +109,63 @@ def _serialize_departure_time(value: str | datetime) -> str:
             "departure_time must be timezone-aware (RFC3339 with offset)",
         )
 
-    return dt.astimezone(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(UTC).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def _compute_google_routes(request_body: dict, headers: dict) -> dict:
+    async with httpx.AsyncClient() as client:  # noqa: TID251
+        last_exc: Exception | None = None
+        for attempt in range(1, GOOGLE_ROUTES_RETRIES + 1):
+            try:
+                response = await client.post(
+                    ROUTES_URL,
+                    json = request_body,
+                    headers = headers,
+                    timeout = GOOGLE_ROUTES_TIMEOUT_S,
+                )
+                response.raise_for_status()
+                try:
+                    return response.json()
+                except (ValueError, TypeError) as exc:
+                    _LOGGER.warning(
+                        "[directions] Google Routes invalid JSON: %s",
+                        type(exc).__name__,
+                    )
+                    raise GoogleRoutesError(
+                        "invalid_json",
+                        "Google Routes API returned invalid JSON",
+                    ) from exc
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                _LOGGER.warning(
+                    "[directions] Google Routes timeout (attempt %s)",
+                    attempt,
+                )
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                summary = _provider_error_summary(exc.response)
+                _LOGGER.warning(
+                    "[directions] Google Routes HTTP %s code=http_%s summary=%s",
+                    status_code,
+                    status_code,
+                    summary or "none",
+                )
+                raise GoogleRoutesError(
+                    f"http_{status_code}",
+                    f"Google Routes API error {status_code}",
+                    provider_status=status_code,
+                    provider_summary=summary,
+                ) from exc
+            except httpx.RequestError as exc:
+                _LOGGER.warning(
+                    "[directions] Google Routes request failed: %s",
+                    type(exc).__name__,
+                )
+                raise GoogleRoutesError(
+                    "request_failed",
+                    "Google Routes API request failed",
+                ) from exc
+        raise GoogleRoutesError("timeout", "Google Routes API timed out") from last_exc
 
 
 async def get_transit_route(
@@ -180,60 +237,9 @@ async def get_transit_route(
         "X-Goog-Api-Key": key,
         "X-Goog-FieldMask": FIELD_MASK
     }
-
-    # Transit computeRoutes with alternatives can be slow. Keep the budget
-    # configurable so local route planning fails fast instead of exhausting
-    # the whole ATLAS interaction window before downstream fallbacks can run.
-    async with httpx.AsyncClient() as client:
-        last_exc: Exception | None = None
-        for attempt in range(1, GOOGLE_ROUTES_RETRIES + 1):
-            try:
-                response = await client.post(
-                    ROUTES_URL,
-                    json = request_body,
-                    headers = headers,
-                    timeout = GOOGLE_ROUTES_TIMEOUT_S,
-                )
-                response.raise_for_status()
-                try:
-                    return response.json()
-                except (ValueError, TypeError) as exc:
-                    print(f"[directions] Google Routes invalid JSON: {type(exc).__name__}")
-                    raise GoogleRoutesError(
-                        "invalid_json",
-                        "Google Routes API returned invalid JSON",
-                    ) from exc
-            except httpx.TimeoutException as exc:
-                last_exc = exc
-                print(f"[directions] Google Routes timeout (attempt {attempt})")
-            except httpx.HTTPStatusError as exc:
-                # Non-2xx (bad/expired key, quota, provider outage). Do not retry;
-                # surface a clean upstream error and keep provider details out of
-                # the public response.
-                status_code = exc.response.status_code
-                summary = _provider_error_summary(exc.response)
-                print(
-                    "[directions] Google Routes HTTP "
-                    f"{status_code} code=http_{status_code} summary={summary or 'none'}"
-                )
-                raise GoogleRoutesError(
-                    f"http_{status_code}",
-                    f"Google Routes API error {status_code}",
-                    provider_status=status_code,
-                    provider_summary=summary,
-                ) from exc
-            except httpx.RequestError as exc:
-                print(f"[directions] Google Routes request failed: {type(exc).__name__}")
-                raise GoogleRoutesError(
-                    "request_failed",
-                    "Google Routes API request failed",
-                ) from exc
-        raise GoogleRoutesError("timeout", "Google Routes API timed out") from last_exc
+    return await _compute_google_routes(request_body, headers)
 
 def parse_response(response: dict) -> list:
-    # Defensive: a malformed/empty provider route (missing legs, partial transit
-    # details, bad timestamps) skips that one route rather than crashing the whole
-    # trip. An entirely empty/garbage response yields [].
     routes = []
     for route in response.get("routes", []):
         legs = route.get("legs") or []
@@ -242,7 +248,7 @@ def parse_response(response: dict) -> list:
         try:
             routes.append(_parse_leg_steps(legs[0]))
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
-            print(f"[directions] skipping malformed route: {exc!r}")
+            _LOGGER.warning("[directions] skipping malformed route: %r", exc)
     return routes
 
 
@@ -269,7 +275,7 @@ async def get_transfer_route_pair(
         routing_preference=routing_preference,
         departure_time=departure_time,
     )
-    first = _route_at_transfer(
+    first = route_at_transfer(
         parse_response(first_response), first_service, transfer_name,
         transfer_coords, True,
     )
@@ -286,7 +292,7 @@ async def get_transfer_route_pair(
         routing_preference=routing_preference,
         departure_time=first_arrival,
     )
-    second = _route_at_transfer(
+    second = route_at_transfer(
         parse_response(second_response), second_service, transfer_name,
         continuation_transfer_coords, False,
     )
@@ -303,31 +309,44 @@ async def get_transfer_route_pair(
     return combined
 
 
-def _route_at_transfer(routes, service, transfer_name, transfer_coords, arrival):
+def _single_service_transit(route, service):
+    transit = [
+        step for step in route
+        if str(step.get("type") or "").upper() in {"SUBWAY", "BUS"}
+    ]
+    if not transit:
+        return None
+    if any(
+        str(step.get("route_id") or step.get("train_line") or "").upper()
+        != str(service).upper()
+        for step in transit
+    ):
+        return None
+    return transit
+
+
+def _transfer_endpoint_matches(step, service, expected, transfer_coords, arrival) -> bool:
+    actual_service = str(
+        step.get("route_id") or step.get("train_line") or ""
+    ).upper()
+    actual_stop = step.get("arrival_stop" if arrival else "departure_stop")
+    point = step.get("arrival_coords" if arrival else "departure_coords")
+    return (
+        actual_service == str(service).upper()
+        and normalize_station_name(str(actual_stop or "")) == expected
+        and _nearby_coords(point, transfer_coords)
+    )
+
+
+def route_at_transfer(routes, service, transfer_name, transfer_coords, arrival):
     expected = normalize_station_name(transfer_name)
     for route in routes or []:
-        transit = [
-            step for step in route
-            if str(step.get("type") or "").upper() in {"SUBWAY", "BUS"}
-        ]
-        if not transit:
-            continue
-        if any(
-            str(step.get("route_id") or step.get("train_line") or "").upper()
-            != str(service).upper()
-            for step in transit
-        ):
+        transit = _single_service_transit(route, service)
+        if transit is None:
             continue
         step = transit[-1] if arrival else transit[0]
-        actual_service = str(
-            step.get("route_id") or step.get("train_line") or ""
-        ).upper()
-        actual_stop = step.get("arrival_stop" if arrival else "departure_stop")
-        point = step.get("arrival_coords" if arrival else "departure_coords")
-        if (
-            actual_service == str(service).upper()
-            and normalize_station_name(str(actual_stop or "")) == expected
-            and _nearby_coords(point, transfer_coords)
+        if _transfer_endpoint_matches(
+            step, service, expected, transfer_coords, arrival
         ):
             return route
     return None
@@ -397,10 +416,10 @@ def _parse_leg_steps(leg: dict) -> list:
 
 
 
-                departure_utc = datetime.fromisoformat(depart_time.replace("Z", "+00:00"))
+                departure_utc = datetime.fromisoformat(depart_time)
                 departure_est = departure_utc.astimezone(ZoneInfo("America/New_York"))
 
-                arrival_utc = datetime.fromisoformat(arrival_time.replace("Z", "+00:00"))
+                arrival_utc = datetime.fromisoformat(arrival_time)
                 arrival_est = arrival_utc.astimezone(ZoneInfo("America/New_York"))
                 minutes_until_train_arrives = (departure_est - datetime.now(ZoneInfo("America/New_York"))).total_seconds() / 60
                 arrival = (arrival_est - datetime.now(ZoneInfo("America/New_York"))).total_seconds() / 60

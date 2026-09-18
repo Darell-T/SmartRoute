@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
-from app.services.trips.crowds import event as event_crowd, search as crowd_search
+from app.services.trips.crowds import event as event_crowd
+from app.services.trips.crowds import search as crowd_search
 from app.services.trips.crowds.hotspots import HotspotHit
 
 _LIVE_SEARCH_DEADLINE_S = 6.0
@@ -26,7 +28,7 @@ def _dynamic_hits(routes: list[list[dict]]) -> list[HotspotHit]:
                 latitude=point.latitude,
                 longitude=point.longitude,
                 expected_at=point.expected_at,
-                route_id="",
+                route_id=point.route_id,
             )
         )
     return hits
@@ -46,33 +48,43 @@ def _route_points(hits: Iterable[HotspotHit]) -> list[event_crowd.RoutePoint]:
     ]
 
 
+def _parse_impact_identity(impact: dict) -> tuple[int, str, str]:
+    venue = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        str(impact.get("venue") or "").casefold(),
+    ).strip()
+    title = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        str(impact.get("title") or "").casefold(),
+    ).strip()
+    return (
+        int(impact.get("route_index", -1)),
+        venue or title,
+        str(impact.get("window_start_iso") or ""),
+    )
+
+
+def _select_stronger_impact(previous: dict | None, impact: dict) -> dict:
+    if previous is None:
+        return impact
+    if (
+        float(impact.get("confidence") or 0),
+        float(impact.get("risk_score") or 0),
+    ) > (
+        float(previous.get("confidence") or 0),
+        float(previous.get("risk_score") or 0),
+    ):
+        return impact
+    return previous
+
+
 def _deduplicate_impacts(impacts: Iterable[dict]) -> list[dict]:
     selected: dict[tuple[int, str, str], dict] = {}
     for impact in impacts:
-        venue = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            str(impact.get("venue") or "").casefold(),
-        ).strip()
-        title = re.sub(
-            r"[^a-z0-9]+",
-            " ",
-            str(impact.get("title") or "").casefold(),
-        ).strip()
-        key = (
-            int(impact.get("route_index", -1)),
-            venue or title,
-            str(impact.get("window_start_iso") or ""),
-        )
-        previous = selected.get(key)
-        if previous is None or (
-            float(impact.get("confidence") or 0),
-            float(impact.get("risk_score") or 0),
-        ) > (
-            float(previous.get("confidence") or 0),
-            float(previous.get("risk_score") or 0),
-        ):
-            selected[key] = impact
+        key = _parse_impact_identity(impact)
+        selected[key] = _select_stronger_impact(selected.get(key), impact)
     return sorted(
         selected.values(),
         key=lambda row: (
@@ -85,11 +97,35 @@ def _deduplicate_impacts(impacts: Iterable[dict]) -> list[dict]:
 
 def _task_outcome(task: asyncio.Task[Any], done: set[asyncio.Task[Any]]) -> Any:
     if task not in done or task.cancelled():
-        return asyncio.TimeoutError()
+        return TimeoutError()
     try:
         return task.result()
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 provider task faults stay unavailable
         return exc
+
+
+def _select_crowd_hits(
+    routes: list[list[dict]],
+    hotspot_hits: Iterable[HotspotHit],
+    explicit_crowd_request: bool,
+) -> list[HotspotHit]:
+    hits = list(hotspot_hits)
+    if not hits and explicit_crowd_request:
+        return _dynamic_hits(routes)
+    return hits
+
+
+def _parse_travel_at(hits: list[HotspotHit], ctx: Any) -> datetime:
+    travel_at = next(
+        (hit.expected_at for hit in hits if hit.expected_at is not None),
+        None,
+    )
+    if travel_at is not None:
+        return travel_at
+    try:
+        return datetime.fromisoformat(str(ctx.now_et))
+    except ValueError:
+        return datetime.now(UTC)
 
 
 async def collect(
@@ -100,22 +136,12 @@ async def collect(
     explicit_crowd_request: bool,
     allow_live_search: bool,
 ) -> tuple[event_crowd.EventEvidenceStatus, list[dict], list[str], dict]:
-    hits = list(hotspot_hits)
-    if not hits and explicit_crowd_request:
-        hits = _dynamic_hits(routes)
+    hits = _select_crowd_hits(routes, hotspot_hits, explicit_crowd_request)
     if not hits:
         return "not_required", [], [], {"grok_status": "not_required"}
 
     points = _route_points(hits)
-    travel_at = next(
-        (hit.expected_at for hit in hits if hit.expected_at is not None),
-        None,
-    )
-    if travel_at is None:
-        try:
-            travel_at = datetime.fromisoformat(str(ctx.now_et).replace("Z", "+00:00"))
-        except ValueError:
-            travel_at = datetime.now(timezone.utc)
+    travel_at = _parse_travel_at(hits, ctx)
 
     ticketmaster_result, grok_result = await _run_provider_searches(
         routes,
@@ -143,7 +169,7 @@ async def collect(
         live_search_required=allow_live_search,
     )
 
-    if allow_live_search and grok_status not in {"complete"}:
+    if allow_live_search and grok_status != "complete":
         failures.append(f"grok_{grok_status}")
     return status, impacts, failures, {
         "grok_status": grok_status,

@@ -8,7 +8,8 @@ import os
 import re
 from typing import Any
 
-from evaluation.route_intelligence import advisor_context, advisor as ai_advisor
+from evaluation.route_intelligence import advisor as ai_advisor
+from evaluation.route_intelligence import advisor_context
 
 
 def _arguments() -> argparse.Namespace:
@@ -34,32 +35,41 @@ def _payload() -> dict[str, Any]:
     )
 
 
+def _certify_selection(output: str) -> int | None:
+    explicit = re.search(r"\[ROUTE:(\d+)\]", output)
+    analysis_selected, analysis = advisor_context.parse_candidate_analysis(output)
+    selected, _parsed_analysis = advisor_context.parse_advisor_selection(output, 2)
+    # parse_advisor_selection deliberately falls back to route zero for
+    # rider safety. Certification must instead prove the live model emitted
+    # a valid explicit decision and analysis for both candidates.
+    if (
+        explicit is None
+        or int(explicit.group(1)) != selected
+        or analysis_selected != selected
+        or set(analysis) != {0, 1}
+    ):
+        return None
+    return selected
+
+
 async def certify() -> dict[str, Any]:
     if not os.getenv("ANTHROPIC_API_KEY", "").strip():
         return {"status": "skipped", "reason": "advisor key is not configured", **ai_advisor.advisor_identity()}
     try:
-        # stream_recommendation carries the production retry limit (three
-        # attempts per pinned model); no user prompt or hidden reasoning is
-        # logged by this command.
-        output = await asyncio.wait_for(ai_advisor.collect_recommendation(_payload()), timeout=20.0)
-        explicit = re.search(r"\[ROUTE:(\d+)\]", output)
-        analysis_selected, analysis = advisor_context.parse_candidate_analysis(output)
-        selected, _parsed_analysis = advisor_context.parse_advisor_selection(output, 2)
-        # parse_advisor_selection deliberately falls back to route zero for
-        # rider safety. Certification must instead prove the live model emitted
-        # a valid explicit decision and analysis for both candidates.
-        if (
-            explicit is None
-            or int(explicit.group(1)) != selected
-            or analysis_selected != selected
-            or set(analysis) != {0, 1}
-        ):
+        # Certification is one bounded Anthropic attempt. Production REST
+        # still retries overload three times; this command does not.
+        output = await asyncio.wait_for(
+            ai_advisor.collect_recommendation(_payload(), overload_attempts=1),
+            timeout=20.0,
+        )
+        selected = _certify_selection(output)
+        if selected is None:
             return {
                 "status": "failed",
                 "reason": "advisor response did not satisfy the route-selection schema",
                 **ai_advisor.advisor_identity(),
             }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 unexpected provider failures reduce to an error class
         return {"status": "failed", "error_type": type(exc).__name__, **ai_advisor.advisor_identity()}
     return {
         "status": "passed",

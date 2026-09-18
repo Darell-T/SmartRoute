@@ -8,6 +8,13 @@
  * `NEXT_PUBLIC_*` value would be).
  */
 
+import { z } from "zod";
+
+const wsTicketPayloadSchema = z.object({
+  ticket: z.string().min(1),
+  ws_base_url: z.string().min(1).optional().catch(undefined),
+});
+
 /** Requests a fresh path-bound ticket from the server-side minting route. Throws on failure. */
 export async function fetchWsTicket(
   path: "/ws/live-feed" | "/ws/service-alerts",
@@ -15,12 +22,13 @@ export async function fetchWsTicket(
 ): Promise<string> {
   const res = await fetch(`/api/ws-ticket?path=${encodeURIComponent(path)}`, { cache: "no-store", signal });
   if (!res.ok) throw new Error(`ws-ticket request failed (${res.status})`);
-  const data = (await res.json()) as { ticket?: string; ws_base_url?: string };
-  if (!data.ticket) throw new Error("ws-ticket response missing ticket");
-  if (data.ws_base_url) {
-    serverWsBaseUrl = data.ws_base_url.replace(/\/+$/, "");
+  const data: unknown = await res.json();
+  const parsed = wsTicketPayloadSchema.safeParse(data);
+  if (!parsed.success) throw new Error("ws-ticket response missing ticket");
+  if (parsed.data.ws_base_url) {
+    serverWsBaseUrl = parsed.data.ws_base_url.replace(/\/+$/, "");
   }
-  return data.ticket;
+  return parsed.data.ticket;
 }
 
 /**
@@ -36,7 +44,7 @@ function isLocalBrowserHost(): boolean {
   return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(window.location.hostname);
 }
 
-function isLocalBackendBase(base: string): boolean {
+export function isLocalBackendBase(base: string): boolean {
   try {
     const parsed = new URL(base);
     return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(parsed.hostname);

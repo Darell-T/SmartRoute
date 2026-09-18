@@ -1,6 +1,5 @@
 import type { RouteCandidate, RouteStep as ApiRouteStep } from "@/types/api";
 import {
-  candidateDelta,
   candidateSignature,
   firstTransitStep,
   normalizeAlternateReason,
@@ -18,13 +17,13 @@ function derivePublicRationale(
       : "Fastest available option",
   ];
   const departsIn = firstTransitStep(steps)?.minutes_until_train_arrives;
-  if (typeof departsIn === "number" && Number.isFinite(departsIn)) {
+  if (departsIn != null && Number.isFinite(departsIn)) {
     parts.push(`live arrival in ${Math.max(1, Math.round(departsIn))} min`);
   }
   const activeAlerts = candidate?.score_breakdown?.active_alerts;
   if (activeAlerts === 0) {
     parts.push("no service alerts");
-  } else if (typeof activeAlerts === "number" && activeAlerts > 0) {
+  } else if (activeAlerts != null && activeAlerts > 0) {
     parts.push(
       `${activeAlerts} service alert${activeAlerts === 1 ? "" : "s"} on route`,
     );
@@ -89,6 +88,13 @@ function routeIdsKey(candidate: RouteCandidate | null | undefined): string {
   return transitRouteIdsFromSteps(candidate?.steps ?? []).join("/");
 }
 
+function routeOptionBase(routeIds: string[], modes: Set<string>): string {
+  const routeLabel = routeIds.join("/");
+  if (modes.size === 1 && modes.has("BUS")) return `${routeLabel} bus option`;
+  if (routeIds.length === 1) return `${routeLabel} route`;
+  return `${routeLabel} subway option`;
+}
+
 function candidateDisplayLabel(
   candidate: RouteCandidate | null | undefined,
   routeCandidates?: RouteCandidate[],
@@ -97,18 +103,11 @@ function candidateDisplayLabel(
   const routeIds = transitRouteIdsFromSteps(candidate?.steps ?? []);
   if (routeIds.length === 0) return "another route";
 
-  const modes = new Set(transit.map((step) => step.type));
   const first = transit[0];
   const primaryKey = routeIdsKey(candidate);
   const duplicates =
     routeCandidates?.filter((row) => routeIdsKey(row) === primaryKey).length ?? 0;
-  const routeLabel = routeIds.join("/");
-  const base =
-    modes.size === 1 && modes.has("BUS")
-      ? `${routeLabel} bus option`
-      : routeIds.length === 1
-        ? `${routeLabel} route`
-        : `${routeLabel} subway option`;
+  const base = routeOptionBase(routeIds, new Set(transit.map((step) => step.type)));
   const transferStop = cleanStopLabel(transit[1]?.departure_stop);
   const boardStop = cleanStopLabel(first?.departure_stop);
 
@@ -160,26 +159,32 @@ function whyNotPhrase(
   if (/^\d+ extra transfer/.test(lower)) {
     return `${line} because it adds ${lower}`;
   }
-  if (/^more walking/.test(lower)) {
+  if (lower.startsWith("more walking")) {
     return `${line} because it has more walking`;
   }
-  if (/^later departure/.test(lower)) {
+  if (lower.startsWith("later departure")) {
     return `${line} because it leaves later`;
   }
-  if (/^affected by delays/.test(lower)) {
+  if (lower.startsWith("affected by delays")) {
     return `${line} because it is affected by delays`;
   }
   const fasterRisk = reason.match(/^faster by (\d+) min · (.+)$/i);
   if (fasterRisk) {
     return `${line} because it is affected by ${fasterRisk[2]} despite being ${fasterRisk[1]} min faster`;
   }
-  if (/^faster/.test(lower)) {
+  if (lower.startsWith("faster")) {
     return `${line} because it trades speed for lower reliability`;
   }
-  if (/^slower/.test(lower)) {
+  if (lower.startsWith("slower")) {
     return `${line} because it is ${lower}`;
   }
   return `${line} because ${lower}`;
+}
+
+function formatWhyNotSentence(reasons: string[]): string {
+  if (reasons.length === 0) return "";
+  if (reasons.length === 1) return `I did not pick ${reasons[0]}.`;
+  return `I did not pick ${reasons[0]} or ${reasons[1]}.`;
 }
 
 function buildWhyNotSentence(
@@ -196,19 +201,15 @@ function buildWhyNotSentence(
     const signature = candidateSignature(candidate);
     if (signature === activeSignature || seen.has(signature)) continue;
     seen.add(signature);
-    const delta = candidateDelta(candidate, activeCandidate).delta;
     const reason = normalizeAlternateReason(
       candidate.rejection_reason ?? candidate.recommendation_reason,
-      delta,
     );
     if (!reason || /similar time/i.test(reason)) continue;
     reasons.push(whyNotPhrase(candidate, reason, routeCandidates));
     if (reasons.length >= 2) break;
   }
 
-  if (reasons.length === 0) return "";
-  if (reasons.length === 1) return `I did not pick ${reasons[0]}.`;
-  return `I did not pick ${reasons[0]} or ${reasons[1]}.`;
+  return formatWhyNotSentence(reasons);
 }
 
 export function buildVisibleRouteReason(

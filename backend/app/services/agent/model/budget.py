@@ -9,11 +9,16 @@ limit never reaches the Anthropic API.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
+from redis.exceptions import RedisError
 
 from app.services import cache
+
+_LOGGER = logging.getLogger(__name__)
 
 AGENT_MAX_CONCURRENT_STREAMS = int(os.getenv("AGENT_MAX_CONCURRENT_STREAMS", "4"))
 AGENT_TURNS_PER_SESSION_PER_MIN = int(os.getenv("AGENT_TURNS_PER_SESSION_PER_MIN", "6"))
@@ -77,7 +82,7 @@ def check_session_rate_limit(session_id: str) -> bool:
 
 
 def _today_key() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _spend_cache_key() -> str:
@@ -109,7 +114,7 @@ def record_usage_cost(input_tokens: int, output_tokens: int) -> float:
     if cost <= 0:
         return 0.0
     key = _spend_cache_key()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     seconds_left_today = 86400 - (now.hour * 3600 + now.minute * 60 + now.second)
     ttl = max(60, seconds_left_today)
     try:
@@ -120,6 +125,9 @@ def record_usage_cost(input_tokens: int, output_tokens: int) -> float:
             pipe.execute()
         else:
             cache.cache_set(key, str(daily_spend_usd() + cost), ttl)
-    except Exception as exc:
-        print(f"[agent-budget] spend counter update failed (continuing): {exc!r}")
+    except (RedisError, OSError, TypeError, ValueError) as exc:
+        _LOGGER.warning(
+            "[agent-budget] spend counter update failed (continuing): %r",
+            exc,
+        )
     return cost

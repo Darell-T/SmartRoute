@@ -2,49 +2,59 @@ import type { RouteStep as ApiRouteStep } from "@/types/api";
 import type {
   CanonicalItinerary,
   CanonicalItineraryLeg,
-} from "@/lib/agent-chat-stream";
+} from "@/lib/agent-chat/stream";
+import { canonicalPlaceLabel } from "@/lib/canonical-itinerary-label";
 import type { RouteDetailStep, RouteStep, RouteStripSegment } from "../types";
 import { isTransitStep } from "@/lib/route-planning";
 import { cleanDestinationLabel } from "./formatters";
 
 export { isTransitStep };
 
-export function routeStepToRailStep(step: ApiRouteStep, index: number): RouteStep {
-  if (step.type === "WALK") {
-    const walkTarget = cleanDestinationLabel(step.arrival_stop);
-    return {
-      type: index === 0 ? "walk" as const : "exit" as const,
-      action: "Walk",
-      title: "Walk",
-      detail: walkTarget ? `To ${walkTarget}` : "Continue on foot",
-      duration:
-        typeof step.duration_minutes === "number"
-          ? `${Math.round(step.duration_minutes)} min`
-          : "walk",
-    };
-  }
+function durationOrFallback(
+  minutes: number | undefined,
+  fallback: string,
+): string {
+  if (minutes === undefined || !Number.isFinite(minutes)) return fallback;
+  return `${Math.round(minutes)} min`;
+}
 
-  const line = step.train_line || step.route_id || (step.type === "BUS" ? "BUS" : "");
+function liveDepartureFields(step: ApiRouteStep) {
   const departsIn = step.minutes_until_train_arrives;
-  const hasLiveDeparture =
-    typeof departsIn === "number" && Number.isFinite(departsIn);
+  if (departsIn === undefined || !Number.isFinite(departsIn)) return {};
   return {
-    type: index === 0 ? "board" as const : "ride" as const,
+    note: `Departs in ${Math.max(1, Math.round(departsIn))} min`,
+    live: true,
+  };
+}
+
+function walkRailStep(step: ApiRouteStep, index: number): RouteStep {
+  const walkTarget = cleanDestinationLabel(step.arrival_stop);
+  return {
+    type: index === 0 ? "walk" : "exit",
+    action: "Walk",
+    title: "Walk",
+    detail: walkTarget ? `To ${walkTarget}` : "Continue on foot",
+    duration: durationOrFallback(step.duration_minutes, "walk"),
+  };
+}
+
+function transitRailStep(step: ApiRouteStep, index: number): RouteStep {
+  const line = step.train_line || step.route_id || (step.type === "BUS" ? "BUS" : "");
+  return {
+    type: index === 0 ? "board" : "ride",
     action: index === 0 ? "Board" : "Ride",
     line,
     title: `${line} ${step.type === "BUS" ? "bus" : "train"}`,
     detail:
-      cleanDestinationLabel(step.direction || step.arrival_stop)
-      || "Transit segment",
-    note: hasLiveDeparture
-      ? `Departs in ${Math.max(1, Math.round(departsIn))} min`
-      : undefined,
-    live: hasLiveDeparture || undefined,
-    duration:
-      typeof step.duration_minutes === "number"
-        ? `${Math.round(step.duration_minutes)} min`
-        : "live",
+      cleanDestinationLabel(step.direction || step.arrival_stop) || "Transit segment",
+    ...liveDepartureFields(step),
+    duration: durationOrFallback(step.duration_minutes, "live"),
   };
+}
+
+export function routeStepToRailStep(step: ApiRouteStep, index: number): RouteStep {
+  if (step.type === "WALK") return walkRailStep(step, index);
+  return transitRailStep(step, index);
 }
 
 
@@ -59,7 +69,7 @@ export function mergeConsecutiveWalks(steps: ApiRouteStep[]): ApiRouteStep[] {
     if (step.type === "WALK" && prev?.type === "WALK") {
       const durations = [prev.duration_minutes, step.duration_minutes].filter(
         (minutes): minutes is number =>
-          typeof minutes === "number" && Number.isFinite(minutes),
+          minutes !== undefined && Number.isFinite(minutes),
       );
       out[out.length - 1] = {
         ...prev,
@@ -77,15 +87,13 @@ export function mergeConsecutiveWalks(steps: ApiRouteStep[]): ApiRouteStep[] {
   return out;
 }
 
-/* Compact visual route strip: [walk 2 min] › [Q] › [5] › [walk 5 min].
-   One segment per merged walk or transit leg, in journey order. */
 export function stripFromSteps(steps: ApiRouteStep[] | undefined): RouteStripSegment[] {
   return mergeConsecutiveWalks(steps ?? []).map((step) =>
     step.type === "WALK"
       ? {
           kind: "walk" as const,
           minutes:
-            typeof step.duration_minutes === "number"
+            step.duration_minutes !== undefined && Number.isFinite(step.duration_minutes)
               ? Math.max(1, Math.round(step.duration_minutes))
               : undefined,
         }
@@ -101,16 +109,12 @@ function namedIntermediateStops(
   step: ApiRouteStep,
   leg?: CanonicalItineraryLeg,
 ): string[] {
-  const fromStep = Array.isArray(step.intermediate_stops)
-    ? step.intermediate_stops
-        .map((name) => (typeof name === "string" ? name.trim() : ""))
-        .filter(Boolean)
-    : [];
-  const fromLeg = Array.isArray(leg?.stops)
-    ? leg.stops
-        .map((stop) => (typeof stop.name === "string" ? stop.name.trim() : ""))
-        .filter(Boolean)
-    : [];
+  const fromStep = step.intermediate_stops
+    ?.map((name) => name.trim())
+    .filter(Boolean) ?? [];
+  const fromLeg = leg?.stops
+    ?.map((stop) => stop.name.trim())
+    .filter(Boolean) ?? [];
   const names = fromStep.length > 0 ? fromStep : fromLeg;
   const board = cleanDestinationLabel(step.departure_stop);
   const alight = cleanDestinationLabel(step.arrival_stop);
@@ -136,115 +140,122 @@ function walkDetailTitle(
   return nextStep?.type === "BUS" ? "Walk to bus stop" : "Walk to station";
 }
 
-/* Full Apple Maps-style details chain: explicit walk / board / ride rows
-   with headsigns, live departures, stop counts, and transfer hand-offs.
-   The UI adds the Start and Arrive endpoint rows. */
+function walkMinutes(step: ApiRouteStep): number | undefined {
+  if (step.duration_minutes === undefined || !Number.isFinite(step.duration_minutes)) {
+    return undefined;
+  }
+  return Math.max(1, Math.round(step.duration_minutes));
+}
+
+function pushWalkDetail(
+  out: RouteDetailStep[],
+  step: ApiRouteStep,
+  nextStep: ApiRouteStep | undefined,
+  isLast: boolean,
+): void {
+  const target = cleanDestinationLabel(step.arrival_stop);
+  const minutes = walkMinutes(step);
+  out.push({
+    kind: "walk",
+    title: walkDetailTitle(target, nextStep, isLast),
+    subtitle: minutes !== undefined ? `About ${minutes} min` : undefined,
+  });
+}
+
+function boardHeadsign(step: ApiRouteStep): string | undefined {
+  const headsign = cleanDestinationLabel(step.direction);
+  if (!headsign) return undefined;
+  if (/bound|to /i.test(headsign)) return headsign;
+  return `Toward ${headsign}`;
+}
+
+function rideStopCount(step: ApiRouteStep): number | undefined {
+  if (step.stop_count !== undefined && step.stop_count > 0) return step.stop_count;
+  if (step.intermediate_stops?.length) return step.intermediate_stops.length + 1;
+  return undefined;
+}
+
+function transitMode(step: ApiRouteStep): "bus" | "subway" {
+  return step.type === "BUS" ? "bus" : "subway";
+}
+
+function stepRouteId(step: ApiRouteStep): string {
+  return (step.route_id || step.train_line || "").toUpperCase();
+}
+
+function rideMetaLabel(step: ApiRouteStep): string {
+  const stopCount = rideStopCount(step);
+  const rideMinutes = walkMinutes(step);
+  return [
+    stopCount !== undefined ? `Ride ${stopCount} stop${stopCount === 1 ? "" : "s"}` : "Ride",
+    rideMinutes !== undefined ? `${rideMinutes} min` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function rideDetailFromStep(
+  step: ApiRouteStep,
+  nextTransit: ApiRouteStep | undefined,
+): RouteDetailStep {
+  const routeId = stepRouteId(step);
+  const mode = transitMode(step);
+  const stops = namedIntermediateStops(step);
+  const rideStep: RouteDetailStep = {
+    kind: "ride",
+    routeId,
+    mode,
+    title: `Ride the ${routeId}`,
+    fromStop: cleanDestinationLabel(step.departure_stop) || undefined,
+    toStop: cleanDestinationLabel(step.arrival_stop) || undefined,
+    rideMeta: rideMetaLabel(step),
+    transferTo: nextTransit ? stepRouteId(nextTransit) : undefined,
+    transferMode: nextTransit ? transitMode(nextTransit) : undefined,
+  };
+  if (stops.length > 0) rideStep.stops = stops;
+  return rideStep;
+}
+
+function pushTransitDetails(
+  out: RouteDetailStep[],
+  step: ApiRouteStep,
+  nextTransit: ApiRouteStep | undefined,
+): void {
+  const routeId = stepRouteId(step);
+  const mode = transitMode(step);
+  const vehicle = mode === "bus" ? "bus" : "train";
+  out.push({
+    kind: "board",
+    routeId,
+    mode,
+    title: `Board the ${routeId} ${vehicle}`,
+    subtitle: boardHeadsign(step),
+    ...liveDepartureFields(step),
+  });
+  out.push(rideDetailFromStep(step, nextTransit));
+}
+
+/* The UI adds the Start and Arrive endpoint rows. */
 export function detailStepsFromSteps(steps: ApiRouteStep[] | undefined): RouteDetailStep[] {
   const merged = mergeConsecutiveWalks(steps ?? []);
   const transits = merged.filter(isTransitStep);
   const out: RouteDetailStep[] = [];
   let transitIndex = 0;
-
-  merged.forEach((step, index) => {
+  for (const [index, step] of merged.entries()) {
     if (step.type === "WALK") {
-      const target = cleanDestinationLabel(step.arrival_stop);
-      const isLast = index === merged.length - 1;
-      const nextStep = merged[index + 1];
-      const minutes =
-        typeof step.duration_minutes === "number"
-          ? Math.max(1, Math.round(step.duration_minutes))
-          : undefined;
-      out.push({
-        kind: "walk",
-        title: walkDetailTitle(target, nextStep, isLast),
-        subtitle: typeof minutes === "number" ? `About ${minutes} min` : undefined,
-      });
-      return;
+      pushWalkDetail(out, step, merged[index + 1], index === merged.length - 1);
+      continue;
     }
-
-    const routeId = (step.route_id || step.train_line || "").toUpperCase();
-    const mode = step.type === "BUS" ? ("bus" as const) : ("subway" as const);
-    const vehicle = mode === "bus" ? "bus" : "train";
-    const headsign = cleanDestinationLabel(step.direction);
-    const departsIn = step.minutes_until_train_arrives;
-    const hasLiveDeparture =
-      typeof departsIn === "number" && Number.isFinite(departsIn);
-    out.push({
-      kind: "board",
-      routeId,
-      mode,
-      title: `Board the ${routeId} ${vehicle}`,
-      subtitle: headsign
-        ? /bound|to /i.test(headsign)
-          ? headsign
-          : `Toward ${headsign}`
-        : undefined,
-      note: hasLiveDeparture
-        ? `Departs in ${Math.max(1, Math.round(departsIn))} min`
-        : undefined,
-      live: hasLiveDeparture || undefined,
-    });
-
-    const stopCount =
-      typeof step.stop_count === "number" && step.stop_count > 0
-        ? step.stop_count
-        : step.intermediate_stops?.length
-          ? step.intermediate_stops.length + 1
-          : undefined;
-    const rideMinutes =
-      typeof step.duration_minutes === "number"
-        ? Math.max(1, Math.round(step.duration_minutes))
-        : undefined;
-    const next = transits[transitIndex + 1];
-    const nextRouteId = next
-      ? (next.route_id || next.train_line || "").toUpperCase()
-      : undefined;
-    const stops = namedIntermediateStops(step);
-    out.push({
-      kind: "ride",
-      routeId,
-      mode,
-      title: `Ride the ${routeId}`,
-      fromStop: cleanDestinationLabel(step.departure_stop) || undefined,
-      toStop: cleanDestinationLabel(step.arrival_stop) || undefined,
-      rideMeta: [
-        typeof stopCount === "number"
-          ? `Ride ${stopCount} stop${stopCount === 1 ? "" : "s"}`
-          : "Ride",
-        typeof rideMinutes === "number" ? `${rideMinutes} min` : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-      ...(stops.length > 0 ? { stops } : {}),
-      transferTo: nextRouteId || undefined,
-      transferMode: next
-        ? next.type === "BUS"
-          ? ("bus" as const)
-          : ("subway" as const)
-        : undefined,
-    });
+    pushTransitDetails(out, step, transits[transitIndex + 1]);
     transitIndex += 1;
-  });
-
-  return out;
-}
-
-function canonicalPlaceLabel(place: unknown, fallback: string) {
-  if (typeof place === "string" && place.trim()) return place.trim();
-  if (place && typeof place === "object") {
-    const record = place as Record<string, unknown>;
-    for (const key of ["display_name", "label", "name", "address"] as const) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
   }
-  return fallback;
+  return out;
 }
 
 function canonicalLegMinutes(leg: CanonicalItineraryLeg | undefined): number | undefined {
   if (!leg) return undefined;
   const seconds = leg.mode.toUpperCase() === "WALK" ? leg.walk_seconds : leg.ride_seconds;
-  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0
+  return seconds !== undefined && Number.isFinite(seconds) && seconds >= 0
     ? Math.round(seconds / 60)
     : undefined;
 }
@@ -269,11 +280,14 @@ function decorateDirectLegSteps(
       step.type === "WALK" ? walkLegs[walkIndex++] : transitLegs[transitIndex++];
     const minutes = canonicalLegMinutes(leg);
     const stops = namedIntermediateStops(step, leg);
-    return {
-      ...step,
-      ...(minutes === undefined ? {} : { duration_minutes: minutes }),
-      ...(stops.length > 0 ? { intermediate_stops: stops } : {}),
-    };
+    const decoratedStep = { ...step };
+    if (minutes !== undefined) {
+      decoratedStep.duration_minutes = minutes;
+    }
+    if (stops.length > 0) {
+      decoratedStep.intermediate_stops = stops;
+    }
+    return decoratedStep;
   });
 }
 
@@ -316,11 +330,14 @@ export function detailStepsFromCanonicalItinerary(
         const leg = segment.legs[index];
         const minutes = canonicalLegMinutes(leg);
         const stops = namedIntermediateStops(step, leg);
-        return {
-          ...step,
-          ...(minutes === undefined ? {} : { duration_minutes: minutes }),
-          ...(stops.length > 0 ? { intermediate_stops: stops } : {}),
-        };
+        const decoratedStep = { ...step };
+        if (minutes !== undefined) {
+          decoratedStep.duration_minutes = minutes;
+        }
+        if (stops.length > 0) {
+          decoratedStep.intermediate_stops = stops;
+        }
+        return decoratedStep;
       });
     result.push(...detailStepsFromSteps(rawSegmentSteps));
 
