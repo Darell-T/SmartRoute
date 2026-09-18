@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { ChatMessage } from "./chat-message.tsx";
 import { Sources } from "../../prompt-kit/source.tsx";
-import { recommendedCardsForChat } from "./recommended-card-selection.ts";
+import { ChatRouteCardList } from "./chat-route-card.tsx";
 import { RecommendedItineraryCard, ItineraryCardSkeleton } from "./recommended-itinerary-card.tsx";
 
 const CHAT_CSS_SOURCE = fs.readFileSync(
@@ -16,27 +16,6 @@ const CHAT_CSS_SOURCE = fs.readFileSync(
   ),
   "utf8",
 );
-
-const cards = [
-  { card_id: "recommended", role: "recommended" },
-  { card_id: "alternative-1", role: "alternative" },
-  { card_id: "alternative-2", role: "alternative" },
-];
-
-test("chat renders only the recommended route without mutating map alternatives", () => {
-  const visible = recommendedCardsForChat(cards);
-
-  assert.deepEqual(visible.map((card) => card.card_id), ["recommended"]);
-  assert.deepEqual(cards.map((card) => card.card_id), [
-    "recommended",
-    "alternative-1",
-    "alternative-2",
-  ]);
-});
-
-test("chat does not promote an alternative when no recommendation exists", () => {
-  assert.deepEqual(recommendedCardsForChat(cards.slice(1)), []);
-});
 
 const itineraryCard = {
   card_id: "recommended",
@@ -242,4 +221,24 @@ test("settled assistant route cards render without prose", () => {
   }));
   assert.match(html, /34 min/);
   assert.match(html, /Open on map/);
+});
+
+
+test("chat renders only the recommendation without mutating map alternatives", () => {
+  const cards = [{
+    ...itineraryCard,
+    card_id: "alternative",
+    role: "alternative",
+    itinerary: { ...itineraryCard.itinerary, total_duration_seconds: 3600 },
+  }, itineraryCard];
+  const before = structuredClone(cards);
+  const html = renderToStaticMarkup(createElement(ChatRouteCardList, { cards }));
+  assert.match(html, /34 min/);
+  assert.doesNotMatch(html, /60 min/);
+  assert.deepEqual(cards, before);
+});
+
+test("chat does not promote an alternative when no recommendation exists", () => {
+  const cards = [{ ...itineraryCard, card_id: "alternative", role: "alternative" }];
+  assert.equal(renderToStaticMarkup(createElement(ChatRouteCardList, { cards })), "");
 });

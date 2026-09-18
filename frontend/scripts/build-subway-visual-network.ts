@@ -59,7 +59,7 @@ const publicDir = resolve(frontendRoot, "public");
 // stay in public/. This directory is git-ignored.
 const debugDir = resolve(frontendRoot, "artifacts", "debug");
 mkdirSync(debugDir, { recursive: true });
-const cacheDir = resolve(frontendRoot, ".gtfs-cache");
+const cacheDir = resolve(process.env.SMARTROUTE_GTFS_CACHE_DIR ?? resolve(frontendRoot, ".gtfs-cache"));
 const ZIP_PATH = resolve(cacheDir, "google_transit.zip");
 
 const OUT_TOPOLOGY_JSON = resolve(
@@ -199,7 +199,7 @@ console.log("[visual-network] reading GTFS zip:", ZIP_PATH);
 if (!existsSync(ZIP_PATH)) {
   throw new Error(
     `GTFS cache missing at ${ZIP_PATH}. Run "npm run build:network" first ` +
-    `to populate the cache (regenerate-canonical-from-gtfs.mjs downloads it).`,
+    `to populate the cache (regenerate-canonical-from-gtfs.ts downloads it).`,
   );
 }
 const zipBuffer = readFileSync(ZIP_PATH);

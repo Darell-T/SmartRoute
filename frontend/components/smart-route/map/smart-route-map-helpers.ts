@@ -1,6 +1,6 @@
 "use client";
 
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl/dist/maplibre-gl.mjs";
 import { z } from "zod";
 import type { Coordinates } from "@/types";
 import artifactManifest from "@/lib/artifact-manifest.json";
@@ -109,24 +109,24 @@ const LAND_LAYER = /land|landuse|sand/i;
 const POI_LAYER = /poi/i;
 
 function fillThemeActions(id: string): {
-  paint: Array<{ property: string; value: string | number }>;
+  paint: NonNullable<maplibregl.PaintPropertyEntry>[];
 } | null {
   if (WATER_LAYER.test(id)) {
-    return { paint: [{ property: "fill-color", value: "#1B3A52" }] };
+    return { paint: [{ name: "fill-color", value: "#1B3A52" }] };
   }
   if (PARK_LAYER.test(id)) {
     return {
       paint: [
-        { property: "fill-color", value: "#1C4327" },
-        { property: "fill-opacity", value: 0.72 },
+        { name: "fill-color", value: "#1C4327" },
+        { name: "fill-opacity", value: 0.72 },
       ],
     };
   }
   if (LAND_LAYER.test(id)) {
     return {
       paint: [
-        { property: "fill-color", value: "#161E2E" },
-        { property: "fill-opacity", value: 0.66 },
+        { name: "fill-color", value: "#161E2E" },
+        { name: "fill-opacity", value: 0.66 },
       ],
     };
   }
@@ -135,27 +135,27 @@ function fillThemeActions(id: string): {
 
 function darkThemeActions(layer: { id: string; type: string }): {
   hide?: boolean;
-  paint: Array<{ property: string; value: string | number }>;
+  paint: NonNullable<maplibregl.PaintPropertyEntry>[];
 } | null {
   const { id, type } = layer;
   if (type === "line" && ROAD_LAYER.test(id)) {
     return {
       paint: [
-        { property: "line-color", value: "#2B3A4D" },
-        { property: "line-opacity", value: 0.55 },
+        { name: "line-color", value: "#2B3A4D" },
+        { name: "line-opacity", value: 0.55 },
       ],
     };
   }
   if (type === "fill") return fillThemeActions(id);
   if (type === "background") {
-    return { paint: [{ property: "background-color", value: "#0D1220" }] };
+    return { paint: [{ name: "background-color", value: "#0D1220" }] };
   }
   if (type !== "symbol") return null;
   if (POI_LAYER.test(id)) return { hide: true, paint: [] };
   return {
     paint: [
-      { property: "text-opacity", value: 0.55 },
-      { property: "text-halo-color", value: "#05070A" },
+      { name: "text-opacity", value: 0.55 },
+      { name: "text-halo-color", value: "#05070A" },
     ],
   };
 }
@@ -170,7 +170,7 @@ export function applyDarkMapTheme(mapInstance: maplibregl.Map): void {
         continue;
       }
       for (const paint of actions.paint) {
-        mapInstance.setPaintProperty(layer.id, paint.property, paint.value);
+        mapInstance.setPaintProperty(layer.id, paint.name, paint.value);
       }
     } catch {
       // This CARTO style revision lacks the targeted property; skip it.

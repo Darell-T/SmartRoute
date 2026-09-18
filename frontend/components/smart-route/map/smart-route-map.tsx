@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl/dist/maplibre-gl.mjs";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import type { RouteStep, TransitRouteData } from "@/types";
@@ -119,6 +119,8 @@ export function SmartRouteMap({
   useEffect(() => {
     if (!mapContainer.current) return;
 
+    maplibregl.setWorkerUrl(`/maplibre/${maplibregl.getVersion()}/maplibre-gl-worker.mjs`);
+
     map.current = new maplibregl.Map({
       container: mapContainer.current,
       style: DARK_MAP_STYLE_URL,
@@ -132,26 +134,26 @@ export function SmartRouteMap({
       canvasContextAttributes: { antialias: false },
     });
 
-    function handleMissingBaseStyleImage(event: { id: string }) {
+    function handleMissingBaseStyleImage(id: string) {
       const activeMap = map.current;
       if (
         !activeMap ||
-        event.id.startsWith("subway-bullet-") ||
-        activeMap.hasImage(event.id)
+        id.startsWith("subway-bullet-") ||
+        activeMap.hasImage(id)
       ) {
         return;
       }
       // CARTO occasionally references an optional shield sprite that is absent
       // from its published sprite sheet. Registering a transparent fallback
       // keeps MapLibre quiet without masking SmartRoute's own transit bullets.
-      activeMap.addImage(event.id, {
+      activeMap.addImage(id, {
         width: 1,
         height: 1,
         data: new Uint8Array(4),
       });
     }
 
-    map.current.on("styleimagemissing", handleMissingBaseStyleImage);
+    map.current.setMissingStyleImageResolver(handleMissingBaseStyleImage);
 
     // QA debug handle: dev-only exposure for Playwright-driven route QA. Gated by
     // process.env.NODE_ENV !== "production" AND URL param `qa-map=1`. Never set
@@ -341,7 +343,7 @@ export function SmartRouteMap({
 
     return () => {
       const currentMap = map.current;
-      currentMap?.off("styleimagemissing", handleMissingBaseStyleImage);
+      currentMap?.setMissingStyleImageResolver(null);
       currentMap?.off("zoom", syncCurrentLocationAccuracy);
       currentMap?.off("zoomend", syncCurrentLocationAccuracy);
       currentMap?.remove();

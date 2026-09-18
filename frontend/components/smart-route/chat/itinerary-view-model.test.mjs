@@ -49,6 +49,20 @@ test("canonical stop count and route identity stay attached to transit legs", ()
   assert.equal(model.events[1].stopCount, 8);
 });
 
+test("collapsed stop chain names the stop count and never ride duration", () => {
+  assert.equal(collapsedStopChainLabel({ stopCount: 8 }), "8 stops");
+  assert.equal(collapsedStopChainLabel({ stopCount: 1 }), "1 stop");
+  assert.equal(
+    collapsedStopChainLabel({
+      fromLabel: "Canal St",
+      toLabel: "Jay St-MetroTech",
+      stops: ["Canal St", "Chambers St", "Fulton St", "Jay St-MetroTech"],
+    }),
+    "2 stops",
+  );
+  assert.equal(collapsedStopChainLabel({}), null);
+});
+
 test("canonical walk duration is displayed without route identifiers", () => {
   const model = buildItineraryViewModel(card);
   assert.equal(model.events[0].durationLabel, "4 min");

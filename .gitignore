@@ -149,3 +149,6 @@ frontend/tests/release/*.spec.ts-snapshots/
 
 # Generated per-run by the eval harness fixture router (debug manifest)
 backend/evaluation/agent/fixtures/*/index.json
+
+# MapLibre worker modules are copied from the locked package by Next config.
+frontend/public/maplibre/
