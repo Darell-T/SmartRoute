@@ -117,7 +117,7 @@ class DiscoveryRouteProviderHandoffTests(
         )
         ctx = _ctx()
         with patch(
-            "app.services.agent.tools.route.preparation_adapter.normalize_routes",
+            "app.services.trips.preparation.prepare.normalize_routes",
             new=lambda routes, _gtfs=None: routes,
         ):
             prepared = await prepare_single_leg(

@@ -1,6 +1,0 @@
-﻿backend/app/services/agent	23830
-backend/app/services/trips	9807
-backend/app/services/incidents	2357
-backend/app/services/live_feed	948
-backend/app/services/mta	3247
-backend/app/routers	1666

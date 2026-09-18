@@ -8,9 +8,11 @@ established HTTP contract. No conversational SSE, no agent session state,
 no advisor/shadow selection, no ``[ROUTE:N]`` control parsing.
 """
 
+import json
 import logging
 import math
 import os
+import time
 import traceback
 
 from fastapi import APIRouter, HTTPException, Request
@@ -242,6 +244,7 @@ def _trip_payload_is_bounded(payload: TripRequest) -> bool:
 async def plan_trip(request: Request, payload: TripRequest):
     if not _trip_payload_is_bounded(payload):
         raise HTTPException(status_code=400, detail="Invalid trip request")
+    request_started = time.monotonic()
     lease = None
     timings: dict[str, float] = {}
     try:
@@ -285,6 +288,14 @@ async def plan_trip(request: Request, payload: TripRequest):
         _LOGGER.warning("[trip] UNHANDLED ERROR:\n%s", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Trip planning failed") from None
     else:
+        logging.getLogger("uvicorn.error").info(
+            "%s",
+            json.dumps({
+                "event": "trip_planning_completed",
+                "stage_timings_ms": timings,
+                "request_duration_ms": (time.monotonic() - request_started) * 1000,
+            }),
+        )
         return result
     finally:
         await admission.release(lease)

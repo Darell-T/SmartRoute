@@ -1,3 +1,0 @@
-duplicate_private_helper_names=27
-duplicate_helper_names_excluding_execute=36
-command=cd backend; rg -o --no-filename '^(?:async )?def (_?[a-z][a-z0-9_]*)' -r '$1' app | Group-Object | Where-Object { $_.Count -ge 2 }

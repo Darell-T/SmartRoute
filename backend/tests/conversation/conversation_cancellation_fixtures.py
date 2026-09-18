@@ -13,7 +13,7 @@ The seam factories script the narrow provider boundary inside the real
 ``prepare_route_options`` executor:
 
 - ``route_seam`` blocks at
-  ``app.services.trips.preparation.dependencies._route_with_recovery``
+  ``app.services.trips.preparation.dependencies.route_with_recovery``
   (the Google-Routes provider recovery seam used by the real
   ``prepare_single_leg``), so a cancel/disconnect lands inside real canonical
   route preparation before any candidate store write.

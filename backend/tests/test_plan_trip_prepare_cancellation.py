@@ -165,7 +165,7 @@ class PlanTripPrepareCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancellation_during_mta_drains_event_and_incident_tasks(self):
         deps, events = _dependencies(block_mta=True)
         with patch(
-            "app.services.agent.tools.route.preparation_adapter.normalize_routes",
+            "app.services.trips.preparation.prepare.normalize_routes",
             new=lambda routes, _gtfs=None: routes,
         ):
             prepare_task = await self._start_prepare(deps)
@@ -185,7 +185,7 @@ class PlanTripPrepareCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancellation_during_event_await_drains_incident_task(self):
         deps, events = _dependencies(block_mta=False)
         with patch(
-            "app.services.agent.tools.route.preparation_adapter.normalize_routes",
+            "app.services.trips.preparation.prepare.normalize_routes",
             new=lambda routes, _gtfs=None: routes,
         ):
             prepare_task = await self._start_prepare(deps)

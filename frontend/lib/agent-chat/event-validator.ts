@@ -132,8 +132,8 @@ const endpointSchema = z.object({
 });
 
 const firstLegArrivalSchema = z.object({
-  route_id: limitedText().optional(),
-  stop_name: limitedText().optional(),
+  route_id: limitedText().optional().catch(undefined),
+  stop_name: limitedText().optional().catch(undefined),
   source_status: arrivalSourceStatusSchema.optional(),
   walking_minutes: z.number().finite().optional(),
   catchable_arrival_minutes: z.number().finite().nullable().optional(),
@@ -147,8 +147,8 @@ const routeSummarySchema = z.object({
   eta_minutes: boundedNumber(0, 1_440),
   transfers: boundedInteger(0, 64),
   lines: nonEmptyTextList(32),
-  reason: nonEmptyText(),
-  first_leg_arrival: firstLegArrivalSchema.nullable().optional(),
+  reason: nonEmptyText().catch("Here's the route I found."),
+  first_leg_arrival: firstLegArrivalSchema.nullable().optional().catch(undefined),
 });
 
 const arrivalPredictionSchema = z.object({
@@ -258,12 +258,18 @@ const routeCardEventSchema = z
     origin: endpointSchema,
     destination: endpointSchema,
     summary: routeSummarySchema,
-    route: z.array(routeStepSchema).max(MAX_LIST),
-    alerts: z.array(alertSchema).max(MAX_LIST),
+    route: z.array(routeStepSchema.extend({
+      polyline: routeStepSchema.shape.polyline.catch(undefined),
+      intermediate_stops: routeStepSchema.shape.intermediate_stops.catch(undefined),
+      intermediate_stop_locations: routeStepSchema.shape.intermediate_stop_locations.catch(undefined),
+    }).nullable().catch(null)).max(MAX_LIST)
+      .transform((steps) => steps.filter((step) => step !== null)),
+    alerts: z.array(alertSchema.nullable().catch(null)).max(MAX_LIST)
+      .transform((alerts) => alerts.filter((alert) => alert !== null)),
     leg_label: limitedText().optional(),
     depart_iso: limitedText().optional(),
-    itinerary: canonicalItinerarySchema.optional(),
-    selection_decision: selectionDecisionSchema.optional(),
+    itinerary: canonicalItinerarySchema.optional().catch(undefined),
+    selection_decision: selectionDecisionSchema.optional().catch(undefined),
   })
   .transform((card): RouteCardEvent => ({ type: "route_card", ...card }));
 

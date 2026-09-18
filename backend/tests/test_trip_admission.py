@@ -1,4 +1,5 @@
 import asyncio
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -22,6 +23,25 @@ def _payload():
 
 
 class TripAdmissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_success_logs_stage_timings_without_passenger_locations(self):
+        async def plan(**kwargs):
+            kwargs["timings"].update(route_provider_ms=12.0, total_ms=15.0)
+            return {"route": []}
+
+        with (
+            patch.object(trips.admission, "acquire", new_callable=AsyncMock),
+            patch.object(trips.admission, "release", new_callable=AsyncMock),
+            patch.object(trips.direct_plan, "plan_direct_trip", side_effect=plan),
+            self.assertLogs("uvicorn.error", level="INFO") as captured,
+        ):
+            assert await trips.plan_trip(_request(), _payload()) == {"route": []}
+
+        assert len(captured.records) == 1
+        record = json.loads(captured.records[0].getMessage())
+        assert record["stage_timings_ms"] == {"route_provider_ms": 12.0, "total_ms": 15.0}
+        assert record["request_duration_ms"] >= 0
+        assert set(record) == {"event", "stage_timings_ms", "request_duration_ms"}
+
     def test_complete_enrichment_step_has_field_specific_bounds(self):
         step = {
             "type": "SUBWAY", "route_id": "A", "departure_stop": "Jay", "arrival_stop": "59 St",

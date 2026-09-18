@@ -48,11 +48,10 @@ function LocalArrivalsMessage({
 function assistantSurfaces(
   turn: AssistantTurn,
   isCaughtUp: boolean,
-  hasText: boolean,
 ) {
   const settled = !turn.isStreaming && isCaughtUp;
   return {
-    showCards: settled && hasText && turn.routeCards.length > 0,
+    showCards: settled && turn.routeCards.length > 0,
     showArrivals: settled && Boolean(turn.arrivals),
     showAlertsAction: settled && turn.transitStatusAction === "view_alerts",
     showSources: settled && Boolean(turn.sources?.length),
@@ -218,7 +217,7 @@ function AssistantMessage({
   const isSearching = turn.toolChips.some(
     (chip) => isSearchActivityTool(chip.tool) && chip.status === "running",
   );
-  const surfaces = assistantSurfaces(turn, isCaughtUp, hasText);
+  const surfaces = assistantSurfaces(turn, isCaughtUp);
   if (turn.error) {
     return (
       <AssistantErrorMessage
