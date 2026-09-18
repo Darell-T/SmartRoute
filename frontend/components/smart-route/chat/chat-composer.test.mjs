@@ -11,7 +11,7 @@ import { ChatSuggestions, ChatWelcome } from "./chat-welcome.tsx";
 import { ChatWorkingPanel } from "./chat-working-panel.tsx";
 import { HomeNearYou } from "./home-near-you.tsx";
 import { ResponseModeMenu } from "./response-mode-menu.tsx";
-import { ChatRouteCardList, recommendedCardsForChat } from "./chat-route-card.tsx";
+import { ChatRouteCardList } from "./chat-route-card.tsx";
 import { WalkingIcon } from "./walking-icon.tsx";
 
 const CHAT_STYLE_SOURCE = fs.readFileSync(
@@ -251,7 +251,6 @@ test("local arrivals turns skip the working panel and expose Live Feed", () => {
     }),
   );
   assert.match(html, /Jay St|Uptown|Open in Live Feed/);
-  assert.deepEqual(recommendedCardsForChat([{ card_id: "recommended", role: "recommended" }]).map((card) => card.card_id), ["recommended"]);
   const empty = renderToStaticMarkup(createElement(ChatRouteCardList, { cards: [] }));
   assert.equal(empty, "");
 });

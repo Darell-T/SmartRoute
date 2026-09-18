@@ -2,9 +2,6 @@
 
 import type { RouteCard as RouteCardData } from "@/lib/agent-chat/stream";
 import { RecommendedItineraryFromCards } from "./recommended-itinerary-card";
-import { recommendedCardsForChat } from "./recommended-card-selection";
-
-export { recommendedCardsForChat } from "./recommended-card-selection";
 
 export function ChatRouteCardList({
   cards,
@@ -15,7 +12,7 @@ export function ChatRouteCardList({
   selectedCardId?: string | null;
   onSelect?: (card: RouteCardData) => void;
 }) {
-  const recommended = recommendedCardsForChat(cards);
+  const recommended = cards.filter((card) => card.role === "recommended");
   if (recommended.length === 0) return null;
 
   return (

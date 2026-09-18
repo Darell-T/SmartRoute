@@ -1,4 +1,4 @@
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl/dist/maplibre-gl.mjs";
 
 const DESKTOP_RAIL_WIDTH = 420;
 const DESKTOP_PADDING = 96;

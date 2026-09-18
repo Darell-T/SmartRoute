@@ -90,6 +90,12 @@ test.describe("SmartRoute shell release behavior", () => {
 
     await expect(page.getByLabel("Search destination or address")).toBeVisible();
     await expect(page.locator(".maplibregl-canvas").first()).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => page.evaluate(() => {
+      const map = window.__smartRouteMap;
+      if (!map?.getSource("sr-subway-network") || !map.isSourceLoaded("sr-subway-network")) return 0;
+      return map.querySourceFeatures("sr-subway-network").length;
+    }), { timeout: 15_000 }).toBeGreaterThan(0);
+
     await page.locator(".maplibregl-canvas").first().click({ force: true, position: { x: 80, y: 80 } });
     const recenter = page.getByLabel("Recenter map");
     if (await recenter.isVisible()) {

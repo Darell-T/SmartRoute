@@ -1,4 +1,4 @@
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl/dist/maplibre-gl.mjs";
 import { z } from "zod";
 import { getLineColor } from "./route-layers";
 import { subwayBulletName, subwayBulletSrc } from "../smart-route/train-bullet";

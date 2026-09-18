@@ -1,4 +1,4 @@
-import type maplibregl from "maplibre-gl";
+import type * as maplibregl from "maplibre-gl";
 
 // Render 3D buildings in MapLibre's native GL pass. A separate interleaved
 // tile and tessellation pipeline adds per-frame work during pan. Native

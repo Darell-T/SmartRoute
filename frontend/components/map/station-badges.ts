@@ -1,4 +1,4 @@
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl/dist/maplibre-gl.mjs";
 import { subwayBulletSrc } from "../smart-route/train-bullet";
 
 /** Add a station badge marker (line bullet + station name).

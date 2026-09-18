@@ -42,9 +42,9 @@
     "clsx": "^2.1.1",
     "iconoir-react": "^7.11.1",
     "lucide-react": "^0.564.0",
-    "maplibre-gl": "^5.24.0",
+    "maplibre-gl": "^6.5.0",
     "motion": "^12.38.0",
-    "next": "^16.3.0",
+    "next": "^16.3.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "tailwind-merge": "^3.3.1",
@@ -57,7 +57,7 @@
     "protocol-buffers-schema": "3.6.1",
     "next": {
       "postcss": "8.5.25",
-      "sharp": "0.35.0"
+      "sharp": "0.35.4"
     },
     "minimatch@3.1.5": {
       "brace-expansion": "1.1.18"
@@ -66,7 +66,7 @@
       "brace-expansion": "5.0.9"
     },
     "@eslint/eslintrc": {
-      "js-yaml": "4.3.1"
+      "js-yaml": "4.3.2"
     }
   },
   "devDependencies": {
@@ -79,7 +79,7 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.3",
-    "eslint-config-next": "^16.2.9",
+    "eslint-config-next": "^16.3.3",
     "oxlint": "1.80.0",
     "postcss": "^8.5.25",
     "tailwindcss": "^4.2.0",

@@ -28,7 +28,8 @@ import {
   interpolateAlongLine,
 } from "./route-stops-features.ts";
 import { addStationBadge, clearBadges } from "./station-badges.ts";
-import maplibregl from "maplibre-gl";
+import { createRequire } from "node:module";
+const maplibregl = createRequire(import.meta.url)("maplibre-gl/dist/maplibre-gl.mjs");
 
 function fakeMap(width = 1440) {
   const sources = new Map();
@@ -191,6 +192,8 @@ test("route preview markers create a current-location element", async () => {
         id: "",
         className: "",
         innerHTML: "",
+        classList: { add() {}, remove() {} },
+        addEventListener() {},
         textContent: "",
         dataset: {},
         style: { cssText: "", setProperty() {} },
@@ -230,7 +233,7 @@ test("route stop layer helpers are idempotent on a fake map", () => {
   clearBadges([]);
 });
 
-test("addStationBadge mounts a subway chip and clearBadges removes it", () => {
+test("addStationBadge mounts a subway chip and clearBadges removes it", (t) => {
   const previousDocument = globalThis.document;
   globalThis.document = {
     createElement(tag) {
@@ -238,27 +241,15 @@ test("addStationBadge mounts a subway chip and clearBadges removes it", () => {
         tagName: tag,
         style: { cssText: "" },
         innerHTML: "",
+        classList: { add() {}, remove() {} },
+        addEventListener() {},
       };
     },
   };
-  const previousMarker = maplibregl.Marker;
+  t.after(() => { globalThis.document = previousDocument; });
   const removed = [];
-  maplibregl.Marker = class {
-    constructor(opts) {
-      this.element = opts.element;
-      this.anchor = opts.anchor;
-    }
-    setLngLat(coords) {
-      this.coords = coords;
-      return this;
-    }
-    addTo() {
-      return this;
-    }
-    remove() {
-      removed.push(this);
-    }
-  };
+  t.mock.method(maplibregl.Marker.prototype, "addTo", function () { return this; });
+  t.mock.method(maplibregl.Marker.prototype, "remove", function () { removed.push(this); });
   const marker = addStationBadge(
     fakeMap(),
     [-73.99, 40.7],
@@ -268,7 +259,9 @@ test("addStationBadge mounts a subway chip and clearBadges removes it", () => {
     0,
     true,
   );
-  assert.equal(marker.anchor, "bottom");
+  assert.equal(marker.getOffset().y, -11);
+  assert.deepEqual(marker.getLngLat().toArray(), [-73.99, 40.7]);
+  assert.match(marker.getElement().innerHTML, /q.svg/);
   const bus = addStationBadge(
     fakeMap(),
     [-73.99, 40.7],
@@ -278,13 +271,12 @@ test("addStationBadge mounts a subway chip and clearBadges removes it", () => {
     1,
     false,
   );
-  assert.equal(bus.anchor, "top");
+  assert.equal(bus.getOffset().y, 11);
+  assert.match(bus.getElement().innerHTML, /B54/);
   const bag = [marker, bus];
   clearBadges(bag);
   assert.equal(removed.length, 2);
   assert.equal(bag.length, 0);
-  maplibregl.Marker = previousMarker;
-  globalThis.document = previousDocument;
 });
 
 test("subway stop features, anchors, and ambient layers install on a fake map", () => {

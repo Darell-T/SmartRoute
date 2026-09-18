@@ -3,7 +3,7 @@ import { smoothSharpCorners } from "../../smooth-polyline.ts";
 import { applyGeometrySmoothingPass } from "./geometry-smoothing-pass.ts";
 import { geometryStats } from "../shared/geometry-utils.ts";
 import { applySameColorJunctionStage } from "./same-color-junction-stage.ts";
-import { applySameRouteEndpointCrossingPass } from "./same-route-endpoint-crossing-pass.ts";
+import { repairSameRouteEndpointCrossings } from "../../same-route-junction-fabric.ts";
 import { applyTightCurveSimplificationPass } from "./tight-curve-simplification-pass.ts";
 import type { LineFeature, Position } from "../shared/types.ts";
 import { routeIdsOf } from "../shared/route-config.ts";
@@ -255,10 +255,14 @@ export function applyDekalbSameColorCollapseStage({
     `[visual-network] tight-curve simplification:   features=${tightCurveFeatureCount} (turn>=${tightCurveTurnDeg}deg/${tightCurveWindowM}m)`,
   );
 
-  const { sameRouteEndpointRepairCount } = applySameRouteEndpointCrossingPass({
-    bundleArtifacts,
-    maxEndpointOvershootM: 180,
-  });
+  let sameRouteEndpointRepairCount = 0;
+  if (bundleArtifacts.visualFeatures) {
+    const repair = repairSameRouteEndpointCrossings(bundleArtifacts.visualFeatures, {
+      maxEndpointOvershootM: 180,
+    });
+    bundleArtifacts.visualFeatures = repair.features;
+    sameRouteEndpointRepairCount = repair.repairCount;
+  }
   console.log(
     `[visual-network] same-route junction fabric: endpoint_repairs=${sameRouteEndpointRepairCount}`,
   );

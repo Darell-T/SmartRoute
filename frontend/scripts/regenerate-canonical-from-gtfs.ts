@@ -10,7 +10,7 @@ import type { Feature, FeatureCollection, LineStringGeometry, Position, RouteId 
 const here = __dirname;
 const frontendRoot = resolve(here, "..");
 const publicDir = resolve(frontendRoot, "public");
-const cacheDir = resolve(frontendRoot, ".gtfs-cache");
+const cacheDir = resolve(process.env.SMARTROUTE_GTFS_CACHE_DIR ?? resolve(frontendRoot, ".gtfs-cache"));
 
 const GTFS_URL =
   "http://web.mta.info/developers/data/nyct/subway/google_transit.zip";

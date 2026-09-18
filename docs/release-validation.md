@@ -51,7 +51,30 @@ scanner output. `provider_fault_jitter` is a fixed-seed, offline replay and
 fake-provider gate; it fails closed if the covered provider classifications,
 deadline, cancellation, or jitter contracts regress.
 
+## Transit artifact regeneration
+
+When verifying a builder change, use the same GTFS archive as the checked-in
+artifacts. `frontend/public/subway-network.canonical.geojson` records its
+`metadata.gtfs_zip_sha256`. Set `SMARTROUTE_GTFS_CACHE_DIR` to a directory
+containing that `google_transit.zip`, then run:
+
+```powershell
+cd frontend
+$env:SMARTROUTE_GTFS_CACHE_DIR='<directory-with-matching-archive>'
+npm run build:transit-artifacts
+npm run verify:transit-artifacts
+```
+
+Without this setting, the builders use `frontend/.gtfs-cache`. The network
+builder downloads the current MTA feed if the archive is absent. A newer feed
+is an input change and needs its own geometry review.
+
 ## Browser and accessibility evidence
+
+Maps require WebGL2. `frontend/next.config.mjs` copies MapLibre's worker and
+shared module from the locked package to a versioned public directory. Both
+files must be served together. The shell browser test checks that the worker
+loads subway features, in addition to checking that the canvas exists.
 
 The committed Linux browser job runs the deterministic non-visual Playwright
 suite and then emits `frontend/test-results/release/browser-evidence.json`.
@@ -100,37 +123,11 @@ findings. Unknown scanner output, omitted scope, a changed input digest, a
 mismatched SHA, or any unaccepted finding fails closed. This gate deliberately
 does not accept arbitrary commands or status-only JSON.
 
-### Approved development exception
+### Run dependency scans
 
-`backend/release_advisory_exceptions.json` contains one temporary exception for
-`GHSA-mh99-v99m-4gvg` in `brace-expansion@1.1.16` at
-`node_modules/brace-expansion`. It is development-only: the finding is present
-in the full frontend audit but absent from `npm audit --omit=dev`. It is the
-`eslint-config-next@16.2.9` / ESLint 9.39.4 chain through
-`@eslint/config-array@0.21.2`, `@eslint/eslintrc@3.3.5`,
-`eslint-plugin-import@2.32.0`,
-`eslint-plugin-jsx-a11y@6.10.2`, `eslint-plugin-react@7.37.5`, and callable
-`minimatch@3.1.5`. Forcing Minimatch 10 is not safe because the current ESLint
-plugins still require the callable 3.x API and no compatible upstream patched
-chain is available.
-
-The exception's first invalid UTC day is **2026-08-27**. It is bound to the exact
-`frontend/package-lock.json` SHA-256
-`67d5dcfdb3b2c68883b162db8c4c08d107f77b7d1a3272b363a2d4fa301e3bc6` and to
-the exact package paths and versions above. A lock digest, ESLint/plugin,
-Minimatch, or Brace Expansion change invalidates it immediately. The generated
-evidence retains the accepted finding separately from all scanner findings; the
-release parser reloads the policy from the candidate checkout and requires a
-one-to-one match. Runtime scopes can never use an exception.
-
-This exception definition was approved and introduced in commit
-`4550d0d38b1bd6ff3ab539a95fadc1535fe529ed`.
-
-Candidate identity is carried by the CI job's immutable `${{ github.sha }}` and
-is compared to the release command's `--commit-sha`. The policy is read from
-that same candidate checkout, while its lock digest prevents a policy from
-being replayed against a different dependency tree. Re-audit before expiry or
-after any dependency change:
+`backend/release_advisory_exceptions.json` contains no accepted exceptions.
+The CI job binds evidence to `${{ github.sha }}` and the candidate dependency
+files. Re-run all scans after changing dependencies:
 
 ```powershell
 cd frontend

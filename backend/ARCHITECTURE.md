@@ -1,6 +1,7 @@
 # Backend architecture
 
-The Agent understands the rider. The backend owns truth and execution.
+The Agent interprets rider requests and selects capabilities. Backend domain
+services prepare routes, collect evidence, and build passenger results.
 
 Chat and `POST /api/trip` must return the same kind of itinerary. Duration,
 arrival time, transfers, walking, stops, and service conditions therefore have
@@ -66,6 +67,7 @@ requests read that index. They do not wait for a scout scan.
 | `/api/agent/chat/session` | `POST` | `app/routers/agent_chat.py` |
 | `/api/agent/chat/session/reset` | `POST` | `app/routers/agent_chat.py` |
 | `/api/trip` | `POST` | `app/routers/trips.py` |
+| `/api/trip/enrich-route` | `POST` | `app/routers/trips.py` |
 | `/api/live-feed` | `POST` | `app/routers/live_feed/router.py` |
 | `/api/service-alerts` | `GET` | `app/routers/live_feed/router.py` |
 | `/api/vehicles` | `GET` | `app/routers/live_feed/router.py` |
@@ -135,7 +137,7 @@ collection, or realtime refresh.
 
 | Path | Contents |
 |---|---|
-| `model/policy.py` | Auto and Quick model policy |
+| `model/policy.py` | Shared model configuration and Auto/Quick budgets |
 | `model/prompt.py` | System prompt and context blocks |
 | `model/request.py` | Anthropic request construction |
 | `model/stream.py` | Model stream parsing and retries |
@@ -201,6 +203,13 @@ The same module owns `PreparedLeg`, `AggregatePreparation`, and `PreparedChain`.
 `preparation.multi_stop.prepare_multi_stop` prepares ordered waypoints.
 `preparation.finalize.finalize_aggregate` returns the final candidate set.
 
+`tools/route/preparation_adapter.py` passes the shared `PreparationDependencies`
+bundle to trip preparation. It supplies Agent location resolution and timing
+callbacks, then converts `RoutePreparationFailure` into a tool failure.
+`preparation/dependencies.py` constructs the provider dependencies for both
+chat and direct trip requests. Neither adapter replaces canonical itinerary
+calculations.
+
 The Agent route adapter keeps single-leg aggregate conversion in
 `tools/route/prepare_route_options.py`. Candidate evidence lookup and nonfatal
 empty candidate-set persistence stay with
@@ -221,8 +230,8 @@ empty candidate-set persistence stay with
 | `realtime.py` | Explicit interface used by cross-provider realtime consumers |
 | `static_gtfs/` | Static store, stop patterns, scheduled arrivals, and migration |
 
-There is no compatibility module for the old `app.services.mta_feed` path.
-Code and tests import `app.services.mta.realtime` or a concrete MTA module.
+Cross-provider consumers use `app.services.mta.realtime`. MTA-specific callers
+can import the concrete module that owns the operation.
 
 ## Live-feed package
 
@@ -255,17 +264,22 @@ An empty result does not prove that a route is clear when a source is missing.
 
 The production request path does not import evaluation modules.
 
-## Package rules
+## Frontend contract boundary
 
-- Package initializers stay empty unless the package exports a public entry
-  point.
-- A directory contains several related modules with one owner.
-- A private file remains separate only when the boundary reduces reading or
-  change cost.
-- The repository has no `helpers`, `common`, `misc`, or generic `utils`
-  package in the backend.
-- Tests import concrete owners. The repository has no compatibility imports
-  for deleted paths.
+`frontend/lib/agent-chat/event-validator.ts` validates streamed events before
+chat state accepts them. `frontend/lib/canonical-itinerary-schema.ts` validates
+the canonical itinerary. Invalid optional route-card fields can be omitted
+without dropping valid required card facts. The frontend does not reconstruct
+missing canonical totals from route geometry or prose.
 
-Change these boundaries only when a concrete behavior, lifecycle, reuse,
-isolation, or reading need justifies the change.
+Chat displays only cards marked `recommended`. Alternatives remain available
+for the map. A completed turn can display its structured results even when the
+assistant text is empty. Transit stop details remain collapsed until the rider
+uses the stop disclosure control.
+
+## Request diagnostics
+
+`app/routers/trips.py` records bounded request and preparation-stage timings.
+`agent/turn/finalization.py` records chat completion, usage, and timings.
+Provider failures are logged where recovery is chosen. Logs must not contain
+credentials, raw provider payloads, or unnecessary rider location data.
