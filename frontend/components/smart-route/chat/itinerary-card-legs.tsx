@@ -12,7 +12,7 @@ import {
   SUBWAY_BULLET_ROUTES,
   TrainBullet,
 } from "@/components/smart-route/train-bullet";
-import { intermediateStopNames } from "./itinerary-event-adapter";
+import { collapsedStopChainLabel, intermediateStopNames } from "./itinerary-event-adapter";
 import { warnUnsupportedRouteId, type ItineraryEvent } from "./itinerary-view-model";
 import { WalkingIcon } from "./walking-icon";
 
@@ -201,11 +201,7 @@ function TransitLeg({
   reduceMotion: boolean;
 }) {
   const stopNames = intermediateStopNames(event);
-  const stopsLabel =
-    event.stopCount != null
-      ? `${event.stopCount} ${event.stopCount === 1 ? "stop" : "stops"}`
-      : null;
-  const rideLabel = [stopsLabel, event.durationLabel].filter(Boolean).join(", ");
+  const rideLabel = collapsedStopChainLabel(event) ?? "";
   return (
     <section className="sr-itinerary-card__leg" aria-label={`${event.kind} leg`}>
       <div className="sr-itinerary-card__leg-glyph">

@@ -7,25 +7,22 @@ existing provider and failure-adaptation seams used by route tools.
 
 from __future__ import annotations
 
-import contextlib
-import dataclasses
 import importlib
-from typing import Any
 
 from app.services.agent.tools.base import ToolResult
 from app.services.agent.tools.location_resolution import resolve_named_place
 from app.services.agent.turn.finalization import record_phase_ms
+from app.services.trips.location import ResolvedPlace
 from app.services.trips.preparation import dependencies as _shared
-from app.services.trips.preparation.context import RoutePreparationFailure
+from app.services.trips.preparation.context import (
+    RoutePreparationContext,
+    RoutePreparationFailure,
+)
 from app.services.trips.preparation.dependencies import (
     EVENT_EVIDENCE_TTL_S,
     LIVE_EVIDENCE_TTL_S,
     TRIP_CONTEXT_TIMEOUT_S,
     new_preparation_timings,
-)
-from app.services.trips.preparation.input import (
-    derive_arrive_by_departure,
-    route_with_recovery,
 )
 from app.services.trips.preparation.prepare import (
     PreparationDependencies,
@@ -40,26 +37,12 @@ directions_service = importlib.import_module("app.services.directions")
 mta_realtime = importlib.import_module("app.services.mta.realtime")
 
 
-async def _route_with_recovery(**kwargs: Any) -> list:
-    return await route_with_recovery(
-        directions_service=directions_service,
-        **kwargs,
-    )
-
-
-async def _derive_arrive_by_departure(**kwargs: Any) -> str:
-    return await derive_arrive_by_departure(
-        directions_service=directions_service,
-        **kwargs,
-    )
-
-
 def build_preparation_dependencies(
     *,
     context_timeout_seconds: float | None = None,
     live_evidence_ttl_seconds: int | None = None,
     event_evidence_ttl_seconds: int | None = None,
-):
+) -> PreparationDependencies:
     """Build the shared bundle with agent-owned endpoint composition."""
 
     return _shared.build_preparation_dependencies(
@@ -71,35 +54,31 @@ def build_preparation_dependencies(
         normalize_routes=normalize_routes,
         directions_module=directions_service,
         mta_module=mta_realtime,
-        route_with_recovery_fn=_route_with_recovery,
-        derive_arrive_by_departure_fn=_derive_arrive_by_departure,
     )
 
 
-def _as_tool_result(value: object) -> object:
-    if isinstance(value, RoutePreparationFailure):
-        return ToolResult(ok=False, error=value.error)
-    return value
-
-
-async def prepare_single_leg(*args: Any, **kwargs: Any) -> PreparedLeg | ToolResult:
+async def prepare_single_leg(
+    tool_input: dict,
+    ctx: RoutePreparationContext,
+    timings: dict[str, float],
+    *,
+    dependencies: PreparationDependencies,
+    emit_comparing_progress: bool = True,
+    resolved_origin: ResolvedPlace | None = None,
+    resolved_destination: ResolvedPlace | None = None,
+) -> PreparedLeg | ToolResult:
     """Run neutral preparation and adapt only its failure value."""
 
-    dependencies = kwargs.get("dependencies")
-    if dependencies is not None:
-        # Bind the agent-level route normalizer without making the neutral
-        # preparation service import agent modules. Dataclass dependencies are
-        # frozen, while lightweight injected fixtures may be mutable.
-        if dataclasses.is_dataclass(dependencies):
-            kwargs["dependencies"] = dataclasses.replace(
-                dependencies,
-                normalize_routes=normalize_routes,
-            )
-        else:
-            with contextlib.suppress(AttributeError, TypeError):
-                dependencies.normalize_routes = normalize_routes
-    result = await _prepare_single_leg(*args, **kwargs)
-    return _as_tool_result(result)
+    result = await _prepare_single_leg(
+        tool_input, ctx, timings,
+        dependencies=dependencies,
+        emit_comparing_progress=emit_comparing_progress,
+        resolved_origin=resolved_origin,
+        resolved_destination=resolved_destination,
+    )
+    if isinstance(result, RoutePreparationFailure):
+        return ToolResult(ok=False, error=result.error)
+    return result
 
 
 __all__ = (

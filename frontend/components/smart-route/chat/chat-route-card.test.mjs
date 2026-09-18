@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { ChatMessage } from "./chat-message.tsx";
 import { Sources } from "../../prompt-kit/source.tsx";
 import { recommendedCardsForChat } from "./recommended-card-selection.ts";
 import { RecommendedItineraryCard, ItineraryCardSkeleton } from "./recommended-itinerary-card.tsx";
@@ -232,4 +233,13 @@ test("source attribution uses PromptKit-style favicon triggers", () => {
   assert.match(markup, /target="_blank"/);
   assert.match(markup, /rel="noopener noreferrer"/);
   assert.match(CHAT_CSS_SOURCE, /\.sr-chat-transit-action\s*\{/);
+});
+
+test("settled assistant route cards render without prose", () => {
+  const html = renderToStaticMarkup(createElement(ChatMessage, {
+    theme: "dark",
+    turn: { role: "assistant", turnId: "t1", text: "", reasoning: "", toolChips: [], routeCards: [itineraryCard], isStreaming: false },
+  }));
+  assert.match(html, /34 min/);
+  assert.match(html, /Open on map/);
 });

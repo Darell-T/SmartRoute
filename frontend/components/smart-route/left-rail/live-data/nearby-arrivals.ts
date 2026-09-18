@@ -6,7 +6,7 @@ import type {
   NearbyTransitGroup,
   Next5Entry,
 } from "../types";
-import { HALF_MILE_METERS } from "./constants";
+export const HALF_MILE_METERS = 804.672;
 import {
   cleanDestinationLabel,
   labelForArrivalMinutes,

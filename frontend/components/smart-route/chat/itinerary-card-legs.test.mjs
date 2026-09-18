@@ -38,7 +38,7 @@ test("itinerary legs render subway, bus, rail, walk, wait, transfer, and waypoin
     }),
   );
   assert.match(subway, /subway leg/);
-  assert.match(subway, /Ride 3 stops, 4 min/);
+  assert.match(subway, /Ride 3 stops/);
   const bus = renderToStaticMarkup(
     createElement(ItineraryLeg, {
       event: event("bus", { routeIds: ["B54"], stopCount: 1 }),
@@ -130,7 +130,7 @@ test("transit legs fall back when stop count, labels, or route ids are missing",
   );
   assert.match(noStops, /Board/);
   assert.match(noStops, /Q ride/);
-  assert.match(noStops, /Ride 4 min/);
+  assert.doesNotMatch(noStops, /Ride /);
   const busNoId = renderToStaticMarkup(
     createElement(ItineraryLeg, {
       event: event("bus", { routeIds: [], stopCount: 2 }),

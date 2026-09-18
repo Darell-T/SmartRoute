@@ -421,7 +421,7 @@ class PrepareSingleLegRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase)
         )
         with patch.object(directions, "get_transit_route", new=AsyncMock(side_effect=[{}, {}])), \
                 patch.object(directions, "parse_response", side_effect=[first, second]), \
-                patch("app.services.agent.tools.route.preparation_adapter.normalize_routes", side_effect=normalize):
+                patch("app.services.trips.preparation.prepare.normalize_routes", side_effect=normalize):
             prepared = await prepare_single_leg(
                 {"origin": "user", "destination": "Delta Pkwy", "max_candidates": 2, "required_route_ids": ["R"]},
                 ctx, {}, dependencies=deps, emit_comparing_progress=False,
@@ -437,7 +437,7 @@ class PrepareSingleLegRecoveryIntegrationTests(unittest.IsolatedAsyncioTestCase)
         assert "R" in observed["mta"][0]
         assert ctx.telemetry["route_candidate_diagnostics"]["recovery_succeeded"]
         assert ctx.telemetry["route_candidate_diagnostics"]["final_structurally_unique_candidate_count"] == 2
-        with patch("app.services.agent.tools.route.preparation_adapter.normalize_routes", side_effect=normalize):
+        with patch("app.services.trips.preparation.prepare.normalize_routes", side_effect=normalize):
             excluded = await prepare_single_leg(
                 {
                     "origin": "user", "destination": "Delta Pkwy", "max_candidates": 2,

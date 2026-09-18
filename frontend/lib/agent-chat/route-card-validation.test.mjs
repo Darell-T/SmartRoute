@@ -124,17 +124,18 @@ test("validates nested transfer semantics without dropping later terminal events
 
   await silenceConsoleWarn(async (calls) => {
     const events = await collect(readerFromChunks([frames]));
-    assert.equal(events.length, 2);
+    assert.equal(events.length, 3);
     assert.equal(events[0].type, "route_card");
     assert.equal(events[0].itinerary.legs[0].transfer_semantics.kind, "same_station");
-    assert.deepEqual(events[1], {
+    assert.equal(events[1].itinerary, undefined);
+    assert.deepEqual(events[2], {
       type: "done",
       session_id: "s1",
       turn_id: "t1",
       stop_reason: "end_turn",
       usage: {},
     });
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 0);
   });
 });
 

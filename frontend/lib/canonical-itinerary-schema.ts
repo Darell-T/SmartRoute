@@ -17,15 +17,13 @@ const fullCoordinateSchema = z
   .object({
     latitude: boundedNumber(40.2, 41.2),
     longitude: boundedNumber(-74.6, -73.2),
-  })
-  .strict();
+  });
 
 const compactCoordinateSchema = z
   .object({
     lat: boundedNumber(40.2, 41.2),
     lng: boundedNumber(-74.6, -73.2),
   })
-  .strict()
   .transform(
     (coordinate): Coordinate => ({
       latitude: coordinate.lat,
@@ -41,13 +39,29 @@ const intermediateStopSchema = z.object({
   lng: boundedNumber(-74.6, -73.2),
 });
 
+const providerRouteTypes = {
+  COMMUTER_RAIL: "RAIL", HEAVY_RAIL: "RAIL", METRO_RAIL: "RAIL",
+  METRO: "RAIL", HIGH_SPEED_TRAIN: "RAIL", LONG_DISTANCE_TRAIN: "RAIL", FERRY: "RAIL",
+  INTERCITY_BUS: "BUS", TROLLEYBUS: "BUS", SHARE_TAXI: "BUS",
+  CABLE_CAR: "TRAM", FUNICULAR: "TRAM", GONDOLA: "TRAM", MONORAIL: "TRAM",
+} as const;
+
+const routeTypeSchema = z.union([
+  z.enum(["WALK", "SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL", "TRAM"]),
+  z.enum([
+    "COMMUTER_RAIL", "HEAVY_RAIL", "METRO_RAIL", "METRO", "HIGH_SPEED_TRAIN",
+    "LONG_DISTANCE_TRAIN", "FERRY", "INTERCITY_BUS", "TROLLEYBUS", "SHARE_TAXI",
+    "CABLE_CAR", "FUNICULAR", "GONDOLA", "MONORAIL",
+  ]).transform((type) => providerRouteTypes[type]),
+]);
+
 export const routeStepSchema = z.object({
-  type: z.enum(["WALK", "SUBWAY", "BUS", "RAIL", "TRAIN", "LIGHT_RAIL", "TRAM"]),
+  type: routeTypeSchema,
   start_point: coordinateSchema.optional(),
   end_point: coordinateSchema.optional(),
   departure_coords: coordinateSchema.optional(),
   arrival_coords: coordinateSchema.optional(),
-  polyline: z.object({ encodedPolyline: nonEmptyText(8_192) }).optional(),
+  polyline: z.object({ encodedPolyline: nonEmptyText(65_536) }).optional(),
   train_line: limitedText().optional(),
   line_color: limitedText().optional(),
   direction: limitedText().optional(),
@@ -64,12 +78,12 @@ export const routeStepSchema = z.object({
   distance_meters: boundedNumber(0, 1_000_000).optional(),
   stop_count: boundedInteger(0, 256).optional(),
   segment_index: boundedInteger(0, 64).optional(),
-  intermediate_stops: nonEmptyTextList(64).optional(),
-  intermediate_stop_locations: z.array(intermediateStopSchema).max(64).optional(),
+  intermediate_stops: nonEmptyTextList(MAX_LIST).optional(),
+  intermediate_stop_locations: z.array(intermediateStopSchema).max(MAX_LIST).optional(),
 });
 
 export const alertSchema = z.object({
-  header: nonEmptyText(),
+  header: nonEmptyText(480),
   description: limitedText(MAX_ALERT_DESCRIPTION).optional(),
   routeIds: nonEmptyTextList(64).optional(),
   route_ids: nonEmptyTextList(64).optional(),
@@ -215,7 +229,7 @@ const itineraryLegSchema = z.object({
   street_walking_seconds: boundedInteger(0, MAX_SECONDS).optional(),
   in_station_transfer_seconds: boundedInteger(0, MAX_SECONDS).optional(),
   geometry: z
-    .object({ encodedPolyline: nonEmptyText(8_192) })
+    .object({ encodedPolyline: nonEmptyText(65_536) })
     .strict()
     .nullable()
     .optional(),
@@ -288,7 +302,7 @@ const itineraryPayloadSchema = z.object({
   data_freshness: limitedText().nullable().optional(),
   departure_at: limitedText().nullable().optional(),
   arrival_at: limitedText().nullable().optional(),
-  total_duration_seconds: boundedInteger(0, MAX_SECONDS),
+  total_duration_seconds: boundedNumber(0, MAX_SECONDS),
   total_walk_seconds: boundedInteger(0, MAX_SECONDS).nullable().optional(),
   total_wait_seconds: boundedInteger(0, MAX_SECONDS).nullable().optional(),
   total_in_vehicle_seconds: boundedInteger(0, MAX_SECONDS).nullable().optional(),

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildItineraryViewModel, buildMergedItineraryViewModel, condensePreviewEvents, formatClockTime, formatDurationMinutes, formatStructuredRecommendationReason, isSupportedSubwayRoute, parseRationale, PREVIEW_EVENT_MAX, shouldCollapseEvents, transferLabel, warnUnsupportedRouteId } from "./itinerary-view-model.ts";
-import { durationMinutesFromSeconds, intermediateStopNames } from "./itinerary-event-adapter.ts";
+import { collapsedStopChainLabel, durationMinutesFromSeconds, intermediateStopNames } from "./itinerary-event-adapter.ts";
 
 const card = {
   card_id: "rc_1", turn_id: "t1", role: "recommended",
@@ -341,4 +341,10 @@ test("planned dwell and empty legs stay explicit", () => {
     itinerary: { ...card.itinerary, legs: null },
   });
   assert.equal(empty.invalid, false);
+});
+
+test("stop disclosure uses the server count or available intermediate names", () => {
+  assert.equal(collapsedStopChainLabel({ stopCount: 8 }), "8 stops");
+  assert.equal(collapsedStopChainLabel({ stops: ["Board", "Middle", "Alight"], fromLabel: "Board", toLabel: "Alight" }), "1 stop");
+  assert.equal(collapsedStopChainLabel({}), null);
 });

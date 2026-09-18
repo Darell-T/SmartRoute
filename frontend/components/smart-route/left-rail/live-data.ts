@@ -13,7 +13,7 @@ import {
 import { buildPlan } from "./live-data/route-plan";
 import type { BuildLeftRailDataInput, LeftRailLiveData } from "./live-data/types";
 
-export { HALF_MILE_METERS } from "./live-data/constants";
+export { HALF_MILE_METERS } from "./live-data/nearby-arrivals";
 export { buildRouteReasoningInsights } from "./live-data/route-reasoning";
 export type { BuildLeftRailDataInput, LeftRailLiveData } from "./live-data/types";
 

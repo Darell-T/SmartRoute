@@ -467,7 +467,7 @@ test("parses a grounded arrival_card event", async () => {
   assert.deepEqual(events, [{ type: "arrival_card", ...payload }]);
 });
 
-test("rejects a malformed present optional itinerary and continues to done", async () => {
+test("keeps the card without a malformed optional itinerary and continues to done", async () => {
   const itinerary = {
     itinerary_id: "rc_abc123",
     total_duration_seconds: 5340,
@@ -506,9 +506,11 @@ test("rejects a malformed present optional itinerary and continues to done", asy
 
   await silenceConsoleWarn(async () => {
     const events = await collect(readerFromChunks([chunk]));
-    assert.equal(events.length, 2);
+    assert.equal(events.length, 3);
     assert.deepEqual(events[0].itinerary, itinerary);
-    assert.equal(events[1].type, "done");
+    assert.equal(events[1].card_id, "rc_legacy");
+    assert.equal(events[1].itinerary, undefined);
+    assert.equal(events[2].type, "done");
   });
 });
 
@@ -533,6 +535,14 @@ test("mutation corpus rejects each malformed nested family without losing a late
   const mutations = [
     { ...routeCard, origin: { ...routeCard.origin, lat: 99 } },
     { ...routeCard, summary: { ...routeCard.summary, eta_minutes: -1 } },
+    { ...arrival, source_status: "invented" },
+    { ...arrival, stop: { latitude: 99, longitude: -73.9 } },
+    { ...arrival, directions: [{ id: "north", label: "Northbound", arrivals: [{ expected_at: "", minutes: 3, realtime: true }] }] },
+    { ...arrival, ambiguity: [{}] },
+    { ...arrival, catchability: { walking_minutes: 1, boarding_buffer_minutes: 1, confidence: 2, arrival_minutes: [] } },
+    { ...arrival, evidence: { source: "mta", observedAt: "2026-07-25T14:00:00Z", status: "current", payload: { directions: Array.from({ length: 33 }, () => ({ id: "north", label: "Northbound", arrivals: [] })) } } },
+  ];
+  const optionalMutations = [
     { ...routeCard, route: [{ ...routeCard.route[0], departure_coords: { latitude: 40.7 } }] },
     { ...routeCard, route: [{ ...routeCard.route[0], departure_coords: { latitude: 40.7, lng: -73.9 } }] },
     { ...routeCard, route: [{ ...routeCard.route[0], departure_coords: { latitude: 40.7, longitude: -73.9, lat: 40.7, lng: -73.9 } }] },
@@ -545,13 +555,12 @@ test("mutation corpus rejects each malformed nested family without losing a late
     { ...routeCard, itinerary: { ...routeCard.itinerary, legs: [{ mode: "", ride_seconds: 2 }] } },
     { ...routeCard, selection_decision: null },
     { ...routeCard, selection_decision: { ...routeCard.selection_decision, selection_source: "invented" } },
-    { ...arrival, source_status: "invented" },
-    { ...arrival, stop: { latitude: 99, longitude: -73.9 } },
-    { ...arrival, directions: [{ id: "north", label: "Northbound", arrivals: [{ expected_at: "", minutes: 3, realtime: true }] }] },
-    { ...arrival, ambiguity: [{}] },
-    { ...arrival, catchability: { walking_minutes: 1, boarding_buffer_minutes: 1, confidence: 2, arrival_minutes: [] } },
-    { ...arrival, evidence: { source: "mta", observedAt: "2026-07-25T14:00:00Z", status: "current", payload: { directions: Array.from({ length: 33 }, () => ({ id: "north", label: "Northbound", arrivals: [] })) } } },
   ];
+  for (const payload of optionalMutations) {
+    const card = parseAgentEvent("route_card", payload);
+    assert.equal(card?.card_id, "card");
+    assert.equal(card?.summary.eta_minutes, 20);
+  }
   const frames = mutations.map((payload) => `event: ${"card_id" in payload ? "route_card" : "arrival_card"}\ndata: ${JSON.stringify(payload)}\n\n`).join("")
     + 'event: done\ndata: {"session_id":"s1","turn_id":"turn","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}\n\n';
   await silenceConsoleWarn(async (calls) => {
@@ -618,4 +627,76 @@ test("arrival cards accept ambiguity resolved by stop_id or stop_name", async ()
   );
   assert.equal(byStopId[0]?.type, "arrival_card");
   assert.equal(byStopName[0]?.type, "arrival_card");
+});
+
+test("keeps a production-shaped route card that used to fail nested contract checks", async () => {
+  const polyline = "p".repeat(9_000);
+  const payload = {
+    card_id: "rc_prod",
+    turn_id: "t1",
+    role: "recommended",
+    origin: { label: "Your location", lat: 40.7484, lng: -73.9857 },
+    destination: { label: "Penn Station", lat: 40.7506, lng: -73.9935 },
+    summary: {
+      eta_minutes: 42,
+      transfers: 1,
+      lines: ["Q", "LIRR"],
+      reason: null,
+      first_leg_arrival: { route_id: "Q", stop_name: null, source_status: "live", walking_minutes: 4 },
+    },
+    route: [
+      {
+        type: "WALK",
+        start_point: { latitude: 40.7484, longitude: -73.9857, lat: 40.7484, lng: -73.9857 },
+        polyline: { encodedPolyline: polyline },
+      },
+      {
+        type: "COMMUTER_RAIL",
+        route_id: "LIRR",
+        departure_coords: { latitude: 40.7506, longitude: -73.9935 },
+        intermediate_stop_locations: Array.from({ length: 80 }, (_, index) => ({
+          name: `Stop ${index + 1}`,
+          lat: 40.74 + index * 0.0001,
+          lng: -73.99,
+        })),
+      },
+    ],
+    alerts: [{
+      source: "mta_service_alerts",
+      alert_id: "lmm:planned_work:1",
+      header: "H".repeat(400),
+      description: "Track work.",
+      route_ids: ["Q"],
+      stop_ids: ["Q01"],
+      direction_scope: "both_directions",
+      material_disruption: true,
+    }],
+    itinerary: {
+      itinerary_id: "itin_prod",
+      total_duration_seconds: 2520.4,
+      transfer_count: 1,
+      legs: [{ mode: "COMMUTER_RAIL", ride_seconds: 1800, geometry: { encodedPolyline: polyline } }],
+    },
+    selection_decision: {
+      selection_reason: "outer_agent_selection",
+      reason_code: null,
+      selection_source: "model",
+    },
+  };
+
+  const events = await collect(readerFromChunks([
+    `event: route_card\ndata: ${JSON.stringify(payload)}\n\n`,
+  ]));
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "route_card");
+  assert.equal(events[0].summary.reason, "Here's the route I found.");
+  assert.equal(events[0].summary.first_leg_arrival.route_id, "Q");
+  assert.equal(events[0].summary.first_leg_arrival.stop_name, undefined);
+  assert.equal(events[0].route[0].polyline.encodedPolyline.length, 9_000);
+  assert.equal(events[0].route[1].type, "RAIL");
+  assert.equal(events[0].route[1].intermediate_stop_locations.length, 80);
+  assert.equal(events[0].alerts[0].header.length, 400);
+  assert.equal(events[0].itinerary.total_duration_seconds, 2520.4);
+  assert.equal(events[0].selection_decision.reason_code, null);
 });

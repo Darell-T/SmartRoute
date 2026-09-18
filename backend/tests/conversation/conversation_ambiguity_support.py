@@ -342,9 +342,9 @@ class _E3Base(unittest.IsolatedAsyncioTestCase):
         patch_targets = [
             ("app.services.agent.tools.route.preparation_adapter.resolve_named_place",
              AsyncMock(side_effect=self._resolve_probe_place)),
-            ("app.services.agent.tools.route.preparation_adapter.route_with_recovery",
+            ("app.services.trips.preparation.dependencies.route_with_recovery",
              AsyncMock(return_value=PROVIDER_ROUTE)),
-            ("app.services.agent.tools.route.preparation_adapter."
+            ("app.services.trips.preparation.dependencies."
              "derive_arrive_by_departure", derive),
             ("app.services.mta.realtime.fetch_service_alerts",
              AsyncMock(return_value=[])),

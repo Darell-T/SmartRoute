@@ -6,7 +6,7 @@ Regenerate the module list with `rg --files backend/app -g "*.py"`.
 
 ## App root
 
-- `backend/app/main.py`. Loads environment and configuration, starts shared clients, registers routers, and exposes `health` and `readiness`. Imported by tests only.
+- `backend/app/main.py`. Loads environment and configuration, starts shared clients, registers routers, and exposes `health` and `readiness`. Uvicorn loads the application through `app.main:app`.
 - `backend/app/observability.py`. Owns turn and tool telemetry through `start_turn`, `finish_turn`, and `wrap_anthropic`. Production importers use `observability`.
 - `backend/app/runtime.py`. Owns runtime-profile checks and `env_int` / `env_float`. Production importers use `runtime`.
 

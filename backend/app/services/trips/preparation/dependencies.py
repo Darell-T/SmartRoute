@@ -60,8 +60,6 @@ def build_preparation_dependencies(
     normalize_routes: Callable[..., Any] | None = None,
     directions_module: Any | None = None,
     mta_module: Any | None = None,
-    route_with_recovery_fn: Callable[..., Awaitable[list]] | None = None,
-    derive_arrive_by_departure_fn: Callable[..., Awaitable[str]] | None = None,
 ) -> PreparationDependencies:
     """Return provider bindings for one model-free route-preparation request."""
     bound_directions = directions_module or directions_service
@@ -81,10 +79,8 @@ def build_preparation_dependencies(
 
     return PreparationDependencies(
         directions_service=bound_directions,
-        route_with_recovery=route_with_recovery_fn or route_with_bound_provider,
-        derive_arrive_by_departure=(
-            derive_arrive_by_departure_fn or derive_with_bound_provider
-        ),
+        route_with_recovery=route_with_bound_provider,
+        derive_arrive_by_departure=derive_with_bound_provider,
         resolve_named_place=resolve_named_place or resolve_neutral_named_place,
         collect_alerts=bound_mta.fetch_service_alerts,
         collect_stalled_trains=bound_mta.get_stalled_trains,

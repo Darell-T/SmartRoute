@@ -48,37 +48,17 @@ _FAILURE_STATES = {
 }
 
 
-def _state(value: object) -> GoalState:
-    value = getattr(value, "state", value)
-    return value if isinstance(value, GoalState) else GoalState(str(value))
-
-
-def _object_facts(evidence: object, key: str) -> tuple[object, bool, bool, object]:
-    raw: object = None
-    attempted = presented = False
-    options: object = ()
-    method = getattr(evidence, "state_for", None)
-    if callable(method):
-        raw = method(key)
-    method = getattr(evidence, "attempted_for", None)
-    if callable(method):
-        attempted = bool(method(key))
-    method = getattr(evidence, "presented_for", None)
-    if callable(method):
-        presented = bool(method(key))
-    method = getattr(evidence, "recovery_options_for", None)
-    if callable(method):
-        options = method(key)
-    return raw, attempted, presented, options
-
-
-def _facts(evidence: object, key: str) -> tuple[GoalState, bool, bool, tuple[str, ...]]:
-    raw, attempted, presented, options = None, False, False, ()
-    if evidence is not None:
-        raw, attempted, presented, options = _object_facts(evidence, key)
-    if raw is None:
-        raw = GoalState.PENDING
-    return _state(raw), attempted, presented, _normalise(options)
+def _facts(
+    evidence: TurnEvidence | None, key: str,
+) -> tuple[GoalState, bool, bool, tuple[str, ...]]:
+    if evidence is None:
+        return GoalState.PENDING, False, False, ()
+    return (
+        evidence.state_for(key),
+        evidence.attempted_for(key),
+        evidence.presented_for(key),
+        _normalise(evidence.recovery_options_for(key)),
+    )
 
 
 def _normalise(values: Iterable[str] | None) -> tuple[str, ...]:
@@ -110,7 +90,7 @@ def _terminal_resolution(successes: int, failures: list[GoalState]) -> TurnResol
 
 def evaluate_completion(
     contract: TurnContract,
-    evidence: object = None,
+    evidence: TurnEvidence | None = None,
     *,
     presented_goal_keys: Iterable[str] = (),
     approved_recovery_options: Iterable[str] | None = None,
@@ -160,7 +140,7 @@ def evaluate_completion(
 
 def completion_telemetry(
     contract: TurnContract,
-    evidence: object,
+    evidence: TurnEvidence | None,
 ) -> dict[str, object]:
     """Project the completion decision without coupling evidence state back here."""
 
@@ -174,7 +154,7 @@ def completion_telemetry(
 
 def _remaining_action(
     contract: TurnContract,
-    evidence: object,
+    evidence: TurnEvidence | None,
     goal_key: str,
     state: GoalState,
     attempted: bool,
@@ -196,7 +176,7 @@ def _remaining_action(
 
 def _goal_progress(
     contract: TurnContract,
-    evidence: object,
+    evidence: TurnEvidence | None,
     goal: OutcomeGoal,
     presented: set[str],
 ) -> tuple[str | None, str | None, GoalState | None, bool, tuple[str, ...]]:

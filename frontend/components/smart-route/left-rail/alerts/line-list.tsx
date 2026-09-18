@@ -8,7 +8,7 @@ import {
   lineAlertSubtitle,
   shortAlertTimeLabel,
 } from "./detail";
-import { useAlertRowSelection } from "./row-selection";
+import { useState } from "react";
 import { TransitText } from "../atoms";
 import type { AlertLineGroupModel } from "./view-model";
 import type { AlertFeedItem } from "../types";
@@ -73,7 +73,7 @@ function AlertLineGroup({ group }: { group: AlertLineGroupModel }) {
 }
 
 function AlertLineRow({ item }: { item: AlertFeedItem }) {
-  const { open, toggle } = useAlertRowSelection();
+  const [open, setOpen] = useState(false);
   const reduceMotion = useReducedMotion();
   const detail = buildAlertDetailView(item);
   const subtitle = lineAlertSubtitle(item);
@@ -141,7 +141,7 @@ function AlertLineRow({ item }: { item: AlertFeedItem }) {
         type="button"
         className="sr-alert-line-row__summary"
         aria-expanded={open}
-        onClick={toggle}
+        onClick={() => setOpen((current) => !current)}
       >
         {header}
       </button>

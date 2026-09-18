@@ -150,7 +150,7 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
     def _route_seam_patchers(self, seam) -> list:
         return [
             patch(
-                "app.services.agent.tools.route.preparation_adapter._route_with_recovery",
+                "app.services.trips.preparation.dependencies.route_with_recovery",
                 new=seam,
             )
         ]
@@ -162,7 +162,7 @@ class CancellationBase(unittest.IsolatedAsyncioTestCase):
             # reaches the live-MTA gather (the blocking seam) without a
             # network provider; the real executor and stores still run.
             patch(
-                "app.services.agent.tools.route.preparation_adapter._route_with_recovery",
+                "app.services.trips.preparation.dependencies.route_with_recovery",
                 new=fast_routes_seam(),
             ),
             patch("app.services.mta.realtime.fetch_service_alerts", new=seam),

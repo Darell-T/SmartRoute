@@ -1775,6 +1775,10 @@ class MockAgentModeTests(_AgentLoopHelpers, unittest.IsolatedAsyncioTestCase):
         assert len(self.loop.client.messages.calls) == 0
         assert "preview" in "".join(event.text for event in events_out if event.type == "token").casefold()
         assert session["route_cards"][-1]["card_id"] == "mock-t1"
+        card = next(event for event in events_out if event.type == "route_card")
+        assert card.route
+        assert card.itinerary["legs"]
+        assert card.itinerary["total_duration_seconds"] == card.summary["eta_minutes"] * 60
 
     async def test_quick_mock_copy_is_shorter_without_changing_route_facts(self):
         automatic = mock_turn.mock_trip_copy("Heading to Costco", "auto")

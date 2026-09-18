@@ -26,7 +26,7 @@ steps, and the map all show the same trip.
 
 > The Agent understands the rider. The backend owns truth and execution.
 
-## Product highlights
+## Project highlights
 
 - An Agent-led conversational flow that understands compound requests,
   follow-ups, saved references, and explicit route constraints.
@@ -42,7 +42,7 @@ steps, and the map all show the same trip.
 - Background incident scouting, so broad incident research is not part of the
   rider request path.
 
-## Product views
+## Project snapshots
 
 | Chat | Transit map |
 |---|---|
