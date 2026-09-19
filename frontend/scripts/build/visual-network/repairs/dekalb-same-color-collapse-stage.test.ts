@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyDekalbSameColorCollapseStage } from "./dekalb-same-color-collapse-stage.ts";
+import { applyDekalbSameColorCollapseStage, clipRedundantDekalbLanes } from "./dekalb-same-color-collapse-stage.ts";
 import type { LineFeature, Position } from "../shared/types.ts";
 
 const CENTER: Position = [-73.98, 40.689];
@@ -54,6 +54,7 @@ function cloneFeatures(features: LineFeature[]): LineFeature[] {
 
 function runStage(visualFeatures: LineFeature[] | undefined) {
   const bundleArtifacts = { visualFeatures };
+  clipRedundantDekalbLanes(bundleArtifacts);
   applyDekalbSameColorCollapseStage({ bundleArtifacts, ...STAGE_KNOBS });
   return bundleArtifacts;
 }

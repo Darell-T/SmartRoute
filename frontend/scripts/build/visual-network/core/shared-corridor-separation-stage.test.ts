@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { applySharedCorridorSeparationStage } from "./shared-corridor-separation-stage.ts";
+import { minSeparationM, sliceArc } from "../../brighton-bq-church-spacing.ts";
+import { clipRedundantDekalbLanes } from "../repairs/dekalb-same-color-collapse-stage.ts";
 import type { LineFeature, Position } from "../shared/types.ts";
 
 function pos(lon: number, lat: number): Position {
@@ -589,4 +591,45 @@ test("same-color B vertices in Newkirk are skipped and an unfixed B/Q pair fails
   const newkirk = report.hotspots.find((h: { name: string }) => h.name === "bq_newkirk_plaza_separation");
   assert.ok(newkirk);
   assert.equal(newkirk.passed, false);
+});
+
+for (const reversed of [false, true]) {
+  test(`adjacent curved repair windows preserve lane separation (reversed=${reversed})`, () => {
+    // A/C and G traces captured before separation, resampled to 61 points each.
+    // The old splice pinched this join to 4.61 m despite each fit passing alone.
+    const [blue, green]: Position[][] = JSON.parse(readFileSync(
+      join(__dirname, "fixtures/shared-corridor-curved-join.json"), "utf8",
+    ));
+    const visualFeatures = [
+      lane("curve-blue", "A", "#0A84FF", blue),
+      lane("curve-green", "G", "#6CBE45", reversed ? green.toReversed() : green),
+    ];
+    const endpoints = visualFeatures.map(({ geometry: { coordinates } }) => [coordinates[0], coordinates.at(-1)]);
+    const reportPath = tempReportPath();
+    applySharedCorridorSeparationStage({ bundleArtifacts: { visualFeatures }, separationReportJsonPath: reportPath });
+    const report = JSON.parse(readFileSync(reportPath, "utf8"));
+    assert.equal(report.summary.windows_fixed, 2);
+    const interior = visualFeatures.map((feature) => sliceArc(feature.geometry.coordinates, 200, 1000));
+    assert.ok(minSeparationM(interior[0], interior[1]) >= 12, "the join must retain the fitted lane spacing");
+    assert.deepEqual(visualFeatures.map(({ geometry: { coordinates } }) => [coordinates[0], coordinates.at(-1)]), endpoints);
+  });
+}
+
+test("DeKalb duplicate traces are clipped before cross-color separation", () => {
+  const { red, blue } = parallelNs(-73.98, 40.685, 40.691, 18);
+  const orange = lane("kept-orange", "B", "#FF6319", red);
+  const yellow = lane("kept-yellow", "Q", "#FCCC0A", blue);
+  orange.properties.bundle_materialization_role = "continuous_lane";
+  yellow.properties.bundle_materialization_role = "continuous_lane";
+  const duplicate = lane("redundant-bd", "B", "#FF6319", blue.map(([lon, lat]) => [lon - eastDeg(lat, 0.2), lat]));
+  duplicate.properties.route_ids = ["B", "D"];
+  const bundleArtifacts = { visualFeatures: [orange, yellow, duplicate] };
+  clipRedundantDekalbLanes(bundleArtifacts);
+  assert.deepEqual(bundleArtifacts.visualFeatures.map((feature) => feature.properties.corridor_id), ["kept-orange", "kept-yellow"]);
+  const reportPath = tempReportPath();
+  applySharedCorridorSeparationStage({ bundleArtifacts, separationReportJsonPath: reportPath });
+  const report = JSON.parse(readFileSync(reportPath, "utf8"));
+  assert.ok(report.hotspots.every((hotspot: { passed: boolean }) => hotspot.passed));
+  assert.deepEqual(orange.geometry.coordinates, red);
+  assert.deepEqual(yellow.geometry.coordinates, blue);
 });

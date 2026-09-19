@@ -190,20 +190,10 @@ function clipRedundantDekalbFeature(
   return { features: parts, clipped: true, snapped };
 }
 
-export function applyDekalbSameColorCollapseStage({
-  bundleArtifacts,
-  sameColorCollapseDistM,
-  smoothAngleThresholdDeg,
-  smoothIterations,
-  smoothRatio,
-  smoothMaxFilletM,
-  tightCurveTurnDeg,
-  tightCurveWindowM,
-  tightCurveIterations,
-  tightCurveLambda,
-  sameColorSnapDistM,
-  fanoutBlendM,
-}: DekalbSameColorCollapseStageInput): void {
+// Remove duplicate source traces before cross-color separation measures them.
+export function clipRedundantDekalbLanes(
+  bundleArtifacts: { visualFeatures?: LineFeature[] },
+): void {
   if (bundleArtifacts.visualFeatures) {
     const kept = keptTrunkVerticesByColor(bundleArtifacts.visualFeatures);
     const clippedFeatures: LineFeature[] = [];
@@ -220,7 +210,22 @@ export function applyDekalbSameColorCollapseStage({
       `[visual-network] DeKalb-zone collapse:        redundant clipped=${clippedCount} cut-ends snapped=${snapped}`,
     );
   }
+}
 
+export function applyDekalbSameColorCollapseStage({
+  bundleArtifacts,
+  sameColorCollapseDistM,
+  smoothAngleThresholdDeg,
+  smoothIterations,
+  smoothRatio,
+  smoothMaxFilletM,
+  tightCurveTurnDeg,
+  tightCurveWindowM,
+  tightCurveIterations,
+  tightCurveLambda,
+  sameColorSnapDistM,
+  fanoutBlendM,
+}: DekalbSameColorCollapseStageInput): void {
   if (bundleArtifacts.visualFeatures) {
     const collapse = collapseSameColorOverlaps(bundleArtifacts.visualFeatures, {
       collapseDistM: sameColorCollapseDistM,

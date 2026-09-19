@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { bridgeRouteGaps } from "../../bridge-route-gaps.ts";
-import { haversineM } from "../../brighton-bq-church-spacing.ts";
+import { pointLineDistanceM, samplePolyline } from "../../brighton-bq-church-spacing.ts";
 import { simplifyTightCurves } from "../../simplify-tight-curves.ts";
 import { smoothSharpCorners } from "../../smooth-polyline.ts";
 import { snapOffRevenueToPolyline } from "../../snap-off-revenue-to-shape.ts";
@@ -70,8 +70,9 @@ function gtfsTracksForFeature(
 ): Position[][] {
   const before = feature.geometry.coordinates;
   const routes = Array.isArray(feature.properties?.route_ids) ? feature.properties.route_ids : [];
-  const start: Position = before[0];
-  const end: Position = before[before.length - 1];
+  // A visual branch can end mid-route. Endpoint matching can prefer a shuttle
+  // that stops before the junction and truncate the branch during rerouting.
+  const samples = samplePolyline(before, 16);
   const tracks: Position[][] = [];
   for (const routeId of routes) {
     const candidates = tracksByRoute.get(String(routeId));
@@ -80,9 +81,7 @@ function gtfsTracksForFeature(
     let bestDistance = Infinity;
     for (const candidate of candidates) {
       if (candidate.length < 2) continue;
-      const forward = haversineM(start, candidate[0]) + haversineM(end, candidate[candidate.length - 1]);
-      const reverse = haversineM(start, candidate[candidate.length - 1]) + haversineM(end, candidate[0]);
-      const distance = Math.min(forward, reverse);
+      const distance = samples.reduce((sum, point) => sum + pointLineDistanceM(point, candidate), 0);
       if (distance >= bestDistance) continue;
       bestDistance = distance;
       best = candidate;

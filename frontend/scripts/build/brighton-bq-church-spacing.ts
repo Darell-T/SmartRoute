@@ -525,7 +525,13 @@ function offsetBalancedSamples(
   const coreMask: boolean[] = [];
   for (let index = 0; index < centers.length; index += 1) {
     const normal = normalAt(centers, index);
-    const existingSeparation = haversineM(yellowSamples[index], orangeSamples[index]);
+    const yellow = projectAt(yellowSamples[index], centers[index][1]);
+    const orange = projectAt(orangeSamples[index], centers[index][1]);
+    // Samples can be displaced along the track. Only the perpendicular gap
+    // describes lane spacing, otherwise a curve can produce an oversized bundle.
+    const existingSeparation = Math.abs(
+      (yellow[0] - orange[0]) * normal[0] + (yellow[1] - orange[1]) * normal[1],
+    );
     const separation = Math.max(existingSeparation, options.targetSeparationM);
     const generatedYellow = offsetPoint(centers[index], normal, yellowSign * separation * 0.5);
     const generatedOrange = offsetPoint(centers[index], normal, -yellowSign * separation * 0.5);
@@ -561,7 +567,12 @@ export function buildBalancedPair(
     (yellowPoint[0] + orangeSamples[index][0]) / 2,
     (yellowPoint[1] + orangeSamples[index][1]) / 2,
   ]);
-  const fittedCenterline = fitHermiteCenterline(rawCenters);
+  let fittedCenterline = fitHermiteCenterline(rawCenters);
+  // A tangent fit can cut across a real bend. Keep its displacement within
+  // one lane gap so later GTFS repairs do not pull the lanes apart again.
+  if (fittedCenterline.coords.some((point) => pointLineDistanceM(point, rawCenters) > options.targetSeparationM)) {
+    fittedCenterline = { coords: rawCenters, fit: "raw_centerline" };
+  }
   const centers = smoothCenterline(fittedCenterline.coords, options.smoothingPasses);
   const centerArcs = cumulativeArcs(centers);
   const yellowSign = yellowSignForPair(centers, yellowSamples, options);

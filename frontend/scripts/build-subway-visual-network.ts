@@ -42,6 +42,7 @@ import { applyPhase3dSameColorMergeStage } from "./build/visual-network/core/pha
 import { buildStageDSpinePrepStage } from "./build/visual-network/core/stage-d-spine-prep-stage.ts";
 import { applyPhase3cLaneContinuityStage } from "./build/visual-network/core/phase-3c-lane-continuity-stage.ts";
 import { applyLaneOffsetFinalizationStage } from "./build/visual-network/core/lane-offset-finalization-stage.ts";
+import { clipRedundantDekalbLanes } from "./build/visual-network/repairs/dekalb-same-color-collapse-stage.ts";
 import { applySharedCorridorSeparationStage } from "./build/visual-network/core/shared-corridor-separation-stage.ts";
 import { applyVisualRepairPipelineStage } from "./build/visual-network/core/visual-repair-pipeline-stage.ts";
 import { writeVisualArtifactStage } from "./build/visual-network/output/artifact-writer-stage.ts";
@@ -366,6 +367,7 @@ applyLaneOffsetFinalizationStage({
 // and corrects any stretch that collapsed below the intended floor despite
 // each member's own offset being baked correctly -- see the file header for
 // why independent-normal offsets don't guarantee real-world separation.
+clipRedundantDekalbLanes(bundleArtifacts);
 applySharedCorridorSeparationStage({
   bundleArtifacts,
   separationReportJsonPath: OUT_SHARED_CORRIDOR_SEPARATION_JSON,

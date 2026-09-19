@@ -1,4 +1,4 @@
-# Visual Network Build
+# Visual network build
 
 ## Purpose
 
@@ -11,13 +11,13 @@ SmartRoute map renderer:
 It turns GTFS topology, OpenData line geometry, route metadata, and authored NYC
 subway repair rules into a deterministic render-ready artifact.
 
-## What Lives Here
+## What lives here
 
 This folder contains focused stages extracted from
 `frontend/scripts/build-subway-visual-network.ts`. Each stage owns one pipeline
 area and should preserve the orchestrator's behavior exactly.
 
-## Important Files And Folders
+## Important files and folders
 
 - `../../build-subway-visual-network.ts`: the top-level orchestrator. It wires
   stages together, owns output paths, and runs the build as a side-effect script.
@@ -41,7 +41,7 @@ area and should preserve the orchestrator's behavior exactly.
 - Route color/order configuration.
 - Intermediate live arrays and maps owned by the orchestrator.
 
-## Outputs And Generated Artifacts
+## Outputs and generated artifacts
 
 - Shipped artifact: `frontend/public/subway-network.visual.geojson`.
 - Candidate artifact: `frontend/artifacts/debug/subway-network.visual.candidate.geojson`.
@@ -52,17 +52,40 @@ area and should preserve the orchestrator's behavior exactly.
 Only the shipped public artifact is runtime data. Debug artifacts are development
 tools and are not committed.
 
-## High-Level Pipeline
+## Pipeline order
 
 1. Read GTFS and OpenData inputs.
 2. Build route topology, branch selections, and topology edge features.
 3. Normalize visual corridors and attach route/lane metadata.
 4. Build bundle, spine, and physical-bundle state.
-5. Apply lane continuity, same-color merge, offset, and local repair stages.
-6. Run validation/reporting gates and write debug artifacts.
-7. Build final metadata and promote the visual artifact only after gates pass.
+5. Apply lane continuity and finalize lane offsets.
+6. Clip redundant DeKalb source traces, then enforce shared-corridor separation.
+7. Run connectivity and anomaly reporting and write debug artifacts.
+8. Apply same-color collapse, smoothing, junction repairs, and local route repairs.
+9. Build final metadata and promote the visual artifact only after gates pass.
 
-## How To Run It
+DeKalb clipping must precede separation. Otherwise the separation pass measures
+source traces that duplicate the retained physical lanes. It can reject the
+build or move a retained lane toward another duplicate.
+
+Separation repairs use short, overlapping curve fits. Adjacent fits blend across
+their overlap using the same source-window positions for both lanes. Slicing each
+fitted lane by output arc length misaligns curved joins and can create a pinch
+even when both individual fits pass. Junction exclusions and separation floors
+still apply. Inspect `frontend/artifacts/debug/subway-network.visual-debug-shared-corridor-separation.json`
+for the measured hotspot results.
+
+Lane spacing uses the perpendicular distance between samples. Their displacement
+along the track must not widen the bundle or stretch station connectors.
+If a tangent fit strays farther than one lane gap from the source centerline,
+the repair follows the source bend instead. This prevents a later GTFS repair
+from pulling the separated lanes back together.
+
+Off-revenue repairs choose a GTFS shape by its distance from samples across the
+visual segment. A segment can end at a junction halfway along a scheduled trip.
+Comparing only endpoints can select a short-turn shape that omits that junction.
+
+## How to run it
 
 Run from `frontend/`.
 
@@ -76,7 +99,7 @@ Local binary equivalent:
 .\node_modules\.bin\tsx.cmd scripts\build-subway-visual-network.ts
 ```
 
-## Validation And Checks
+## Validation and checks
 
 For behavior-preserving refactors:
 
@@ -91,20 +114,20 @@ For behavior-preserving refactors:
 6. Restore timestamp-only generated diffs before committing source-only changes.
 7. Run the runtime map checks documented in `../tests/README.md`.
 
-## Artifact Parity Expectations
+## Artifact parity expectations
 
 Visual-network changes are accepted only when the generated artifact is identical
 except timestamp-like metadata, unless a task explicitly calls for a generated
 artifact update. A raw one-line GeoJSON diff is not enough; use semantic JSON
 comparison and strip timestamp-ish fields before deciding.
 
-## Provenance Strings
+## Provenance strings
 
 Some generated metadata strings intentionally still reference
 `build-subway-visual-network.mjs`. Those strings are baked into artifact parity
 expectations and should not be rewritten during organization or refactor work.
 
-## Safe Change Guide
+## Safe change guide
 
 - Keep stage boundaries meaningful; avoid one-call wrapper modules.
 - Preserve pass order and mutate-in-place behavior for repair and core stages.
@@ -114,7 +137,7 @@ expectations and should not be rewritten during organization or refactor work.
   behavior-neutral typing changes separate.
 - Run one full visual build gate per coherent stage extraction.
 
-## Change Map
+## Change map
 
 - GTFS parsing and branch topology: `inputs/`.
 - OpenData visual line normalization: `inputs/opendata-visual-input-stage.ts`.
@@ -126,7 +149,7 @@ expectations and should not be rewritten during organization or refactor work.
 - Validation gates and debug reports: `validation/`.
 - Metadata, candidate output, and final artifact promotion: `output/`.
 
-## Do-Not-Touch / Gotchas
+## Constraints
 
 - Do not re-enable disabled helper sentinels without a dedicated behavior
   change and full artifact gate.
@@ -136,7 +159,7 @@ expectations and should not be rewritten during organization or refactor work.
 - Do not reorder local repair stages casually; later repairs often depend on
   previous in-place mutations.
 
-## Related Docs
+## Related docs
 
 - `../README.md`
 - `../tests/README.md`
