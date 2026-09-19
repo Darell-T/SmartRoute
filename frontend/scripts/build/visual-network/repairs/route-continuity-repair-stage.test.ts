@@ -178,3 +178,24 @@ test("route continuity repair matches one of two GTFS tracks and skips object ro
     [-73.99, 40.751],
   ]);
 });
+
+for (const reversed of [false, true]) {
+  test(`a partial visual branch selects a covering GTFS shape over a short-turn shuttle (reversed=${reversed})`, () => {
+    const dir = mkdtempSync(join(tmpdir(), "continuity-short-turn-"));
+    const canonicalPath = join(dir, "canonical.geojson");
+    const full: Array<[number, number]> = [[-73.93, 40.88], [-73.93, 40.70]];
+    const shortTurn: Array<[number, number]> = [[-73.93, 40.88], [-73.93, 40.84]];
+    writeCanonical(canonicalPath, [shortTurn, reversed ? full.toReversed() : full].map((coordinates) => ({
+      type: "Feature",
+      geometry: { type: "LineString", coordinates },
+      properties: { route_id: "5" },
+    })));
+    const coords: Array<[number, number]> = [
+      [-73.93, 40.88], [-73.93, 40.86], [-73.93, 40.84], [-73.93, 40.82], [-73.93, 40.817],
+    ];
+    const branch = line("five-to-junction", ["5"], structuredClone(coords));
+    applyRouteContinuityRepairStage({ bundleArtifacts: { visualFeatures: [branch] }, canonicalGeoJsonPath: canonicalPath, ...GAPS });
+    assert.deepEqual(branch.geometry.coordinates, coords, "the branch must retain its junction instead of ending at the shuttle terminus");
+    assert.equal(branch.properties.off_revenue_rerouted, undefined);
+  });
+}
