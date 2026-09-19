@@ -407,3 +407,32 @@ test("Brighton B/Q Church spacing ignores string route_ids and missing color", (
   assert.equal(diagnostics.yellow_corridor_id, null);
   assert.equal(diagnostics.orange_corridor_id, null);
 });
+
+test("balanced lane spacing excludes displacement along the track", () => {
+  const yellow = [ll(0, 0), ll(0, 1000)];
+  const orange = [ll(6, 80), ll(6, 1080)];
+  const balanced = buildBalancedPair(yellow, orange, {
+    bbox: { minLon: -180, maxLon: 180, minLat: -90, maxLat: 90 },
+    marginM: 0, targetSeparationM: 13, blendM: 40, sampleM: 8,
+    smoothingPasses: 0, blendFromCore: false, coreStartFraction: 0.25, coreEndFraction: 0.75,
+  });
+  const middle = Math.floor(balanced.yellow.length / 2);
+  const gap = haversineM(balanced.yellow[middle], balanced.orange[middle]);
+  assert.ok(gap >= 12.5 && gap <= 13.5, `expected a 13m lane gap, got ${gap}m`);
+  assert.deepEqual(balanced.yellow[0], yellow[0]);
+  assert.deepEqual(balanced.orange.at(-1), orange.at(-1));
+});
+
+test("balanced lanes retain bends that a tangent fit cuts across", () => {
+  const center = Array.from({ length: 101 }, (_, index) => ll(index * 10, 80 * Math.sin(index * Math.PI / 50)));
+  const yellow = center.map((point, index) => offsetPoint(point, normalAt(center, index), 3));
+  const orange = center.map((point, index) => offsetPoint(point, normalAt(center, index), -3));
+  const balanced = buildBalancedPair(yellow, orange, {
+    bbox: { minLon: -180, maxLon: 180, minLat: -90, maxLat: 90 },
+    marginM: 0, targetSeparationM: 13, blendM: 40, sampleM: 8,
+    smoothingPasses: 0, blendFromCore: false, coreStartFraction: 0.25, coreEndFraction: 0.75,
+  });
+  const displacement = Math.max(...balanced.yellow.map((point) => pointLineDistanceM(point, center)));
+  assert.ok(displacement < 13, `lane must follow the source bend, got ${displacement}m displacement`);
+  assert.ok(minSeparationM(sliceArc(balanced.yellow, 100, 900), sliceArc(balanced.orange, 100, 900)) >= 12);
+});

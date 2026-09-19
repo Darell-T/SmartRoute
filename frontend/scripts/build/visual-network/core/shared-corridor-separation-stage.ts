@@ -31,6 +31,7 @@ import {
   buildBalancedPair,
   cumulativeArcs,
   haversineM,
+  interpolateAtArc,
   lengthM,
   minSeparationM,
   orientationNeedsReverse,
@@ -382,8 +383,6 @@ type WindowFit = {
   aSign: number;
   wStart: number;
   wEnd: number;
-  coreStart: number;
-  coreEnd: number;
 };
 
 type PendingReplacement = {
@@ -507,8 +506,6 @@ function fitOneWindow(
   bLen: number,
   wStart: number,
   wEnd: number,
-  coreStart: number,
-  coreEnd: number,
   junctionPoints: Position[],
   claimed: ClaimedRanges,
   a: SeparationCandidate,
@@ -553,8 +550,6 @@ function fitOneWindow(
     aSign: balanced.aSign,
     wStart,
     wEnd,
-    coreStart,
-    coreEnd,
   };
 }
 
@@ -642,21 +637,60 @@ function normalizeRunSigns(
   return { runs, windowsFixedDelta };
 }
 
-type ArcKeepRange = {
-  keepStart: number;
-  keepEnd: number;
-};
+// Fitted lanes share sample positions in the source window. Their output arc
+// lengths differ on curves, so meter-based slicing misaligns the two lanes.
+function windowSampleArcs(fitted: WindowFit): number[] {
+  return fitted.yellow.map((_, index) => fitted.wStart + (fitted.wEnd - fitted.wStart) * index / (fitted.yellow.length - 1));
+}
 
-function keepRangeForRunWindow(
-  fitted: WindowFit,
-  j: number,
-  runStart: number,
-  runEnd: number,
-): ArcKeepRange {
-  return {
-    keepStart: j === runStart ? 0 : fitted.coreStart - fitted.wStart,
-    keepEnd: j === runEnd - 1 ? lengthM(fitted.yellow) : fitted.coreEnd - fitted.wStart,
-  };
+function sliceFittedWindow(coords: Position[], fitted: WindowFit, start: number, end: number): Position[] {
+  const arcs = windowSampleArcs(fitted);
+  return [
+    interpolateAtArc(coords, arcs, start),
+    ...coords.filter((_, index) => arcs[index] > start && arcs[index] < end),
+    interpolateAtArc(coords, arcs, end),
+  ];
+}
+
+function blendWindowOverlap(left: WindowFit, right: WindowFit) {
+  const start = right.wStart;
+  const end = left.wEnd;
+  const steps = Math.max(1, Math.ceil((end - start) / SAMPLE_M));
+  const leftArcs = windowSampleArcs(left);
+  const rightArcs = windowSampleArcs(right);
+  const blended: { yellow: Position[]; orange: Position[] } = { yellow: [], orange: [] };
+  for (let i = 0; i <= steps; i += 1) {
+    const t = i / steps;
+    const arc = start + (end - start) * t;
+    for (const side of ["yellow", "orange"] as const) {
+      const a = interpolateAtArc(left[side], leftArcs, arc);
+      const b = interpolateAtArc(right[side], rightArcs, arc);
+      blended[side].push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+  }
+  return blended;
+}
+
+function mergeWindowRun(windows: WindowFit[]) {
+  const mergedYellow: Position[] = [];
+  const mergedOrange: Position[] = [];
+  for (let j = 0; j < windows.length; j += 1) {
+    const fitted = windows[j];
+    const previous = windows[j - 1];
+    const next = windows[j + 1];
+    const keepStart = previous?.wEnd ?? fitted.wStart;
+    const keepEnd = next?.wStart ?? fitted.wEnd;
+    if (keepEnd > keepStart) {
+      mergedYellow.push(...sliceFittedWindow(fitted.yellow, fitted, keepStart, keepEnd));
+      mergedOrange.push(...sliceFittedWindow(fitted.orange, fitted, keepStart, keepEnd));
+    }
+    if (next) {
+      const blended = blendWindowOverlap(fitted, next);
+      mergedYellow.push(...blended.yellow);
+      mergedOrange.push(...blended.orange);
+    }
+  }
+  return { mergedYellow, mergedOrange };
 }
 
 function queueMergedRunReplacements(
@@ -672,19 +706,8 @@ function queueMergedRunReplacements(
   let anyApplied = false;
   for (let rIdx = runs.length - 1; rIdx >= 0; rIdx -= 1) {
     const { start: runStart, end: runEnd } = runs[rIdx];
-    const mergedYellow: Position[] = [];
-    const mergedOrange: Position[] = [];
-    let lastASign = 0;
-    for (let j = runStart; j < runEnd; j += 1) {
-      const fitted = winResults[j];
-      if (!fitted) continue;
-      const { keepStart, keepEnd } = keepRangeForRunWindow(fitted, j, runStart, runEnd);
-      if (keepEnd > keepStart) {
-        mergedYellow.push(...sliceArc(fitted.yellow, keepStart, keepEnd));
-        mergedOrange.push(...sliceArc(fitted.orange, keepStart, keepEnd));
-      }
-      lastASign = fitted.aSign;
-    }
+    const windows = winResults.slice(runStart, runEnd).filter((window): window is WindowFit => window !== null);
+    const { mergedYellow, mergedOrange } = mergeWindowRun(windows);
     if (mergedYellow.length < 2 || mergedOrange.length < 2) continue;
     const firstR = winResults[runStart];
     const lastR = winResults[runEnd - 1];
@@ -706,8 +729,8 @@ function queueMergedRunReplacements(
     b.properties.shared_corridor_separation_enforced = true;
     a.properties.lane_offset_baked = true;
     b.properties.lane_offset_baked = true;
-    a.properties.lane_slot_semantic = lastASign * 0.5;
-    b.properties.lane_slot_semantic = -lastASign * 0.5;
+    a.properties.lane_slot_semantic = lastR.aSign * 0.5;
+    b.properties.lane_slot_semantic = -lastR.aSign * 0.5;
     claimRange(claimed, a, aFullStart, aFullEnd);
     claimRange(claimed, b, bFullStart, bFullEnd);
     anyApplied = true;
@@ -776,9 +799,7 @@ function projectPairPockets(
   let windowsFixedDelta = 0;
   for (const [pStart, pEnd] of pockets) {
     const pocketWindows = windowsForPocket(pStart, pEnd, aLen);
-    const pocketLen = pEnd - pStart;
     const chunkCount = pocketWindows.length;
-    const chunkLen = pocketLen / chunkCount;
     const winResults: Array<WindowFit | null> = [];
     for (let wi = 0; wi < chunkCount; wi += 1) {
       const [wStart, wEnd] = pocketWindows[wi];
@@ -791,8 +812,6 @@ function projectPairPockets(
         bLen,
         wStart,
         wEnd,
-        pStart + wi * chunkLen,
-        pStart + (wi + 1) * chunkLen,
         junctionPoints,
         claimed,
         pair.a,
