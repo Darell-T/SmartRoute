@@ -9,10 +9,10 @@ FastAPI backend. Some names look legacy but are still load-bearing contracts.
 - `server/` owns Next route-handler proxies, rate limiting, and request principals that must never reach the browser bundle.
 - `hooks/` owns React hooks that are not part of agent chat, including live feed, service alerts, destination search, theme, viewport, and voice input.
 - `api.ts` owns browser trip-plan and route-enrichment fetches against the Next API routes.
-- `canonical-itinerary-schema.ts` owns the zod schema for the server-owned canonical itinerary.
-- `canonical-itinerary-label.ts` owns passenger-facing place and stop labels derived from canonical itinerary fields.
+- The trip-response schema validates the server-owned trip.
+- Trip label helpers format place and stop names from the server response.
 - `trip-response.ts` owns zod parsing of the trip-plan payload and the `TRIP_PLAN_FAILED` copy.
-- `route-planning.ts` owns transit-step classification and canonical route-id derivation for display scoping.
+- `route-planning.ts` owns transit-step classification and shared route-id derivation for display scoping.
 - `response-presentation.ts` owns Auto and Quick presentation-mode persistence for chat.
 - `smart-route.ts` owns formatting of server-owned route summary facts without inventing durations.
 - `initial-geolocation.ts` owns first-load NYC geolocation resolution and service-area fallback.

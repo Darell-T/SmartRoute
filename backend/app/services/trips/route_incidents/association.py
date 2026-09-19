@@ -2,7 +2,7 @@
 
 This leaf module deliberately has no dependency on the incident scanner, route
 advisor, or provider clients.  It establishes one serialization contract for
-the candidate-scoped association returned by the local cached-511NY matcher.
+the association between incident evidence and route candidates.
 """
 
 from __future__ import annotations

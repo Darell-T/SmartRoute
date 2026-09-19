@@ -8,7 +8,7 @@ SmartRoute treats Damn Lines as optional evidence inside the existing place
 discovery and destination decision flow. It does not add a ninth Agent
 capability. The Agent selects a turn-scoped Queue Context on
 `discover_places`, while the backend owns provider access, normalization,
-freshness, historical aggregation, canonical queue prose, failure handling,
+freshness, historical aggregation, server-written queue text, failure handling,
 and trusted source attribution.
 
 Google Places remains authoritative for Physical Venue identity, branch,
@@ -31,7 +31,7 @@ for an open registered venue without current coverage and a direct answer to an
 explicit historical question. It is never blended with a partial current
 observation or presented as equivalent to current evidence.
 
-Queue evidence is conversational. Canonical backend prose follows the ordered
+Queue evidence is conversational. Backend text follows the ordered
 place recommendations, and a structured source component attributes Damn
 Lines once for the response. Queue information never enters route arithmetic,
 the Route Card, route steps, map markers, or map presentation. Camera images,

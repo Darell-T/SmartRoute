@@ -86,7 +86,6 @@ export interface CanonicalItineraryLeg {
   in_station_transfer_seconds?: number;
   geometry?: unknown;
   service_data_basis?: string;
-  [key: string]: unknown;
 }
 
 export interface CanonicalItineraryPlace {
@@ -101,7 +100,6 @@ export interface CanonicalItineraryPlace {
   longitude?: number | null;
   dwell_minutes?: number | null;
   dwell_source?: "default" | "user" | string | null;
-  [key: string]: unknown;
 }
 
 export interface CanonicalItinerarySegment {
@@ -145,7 +143,6 @@ export interface CanonicalItinerary {
   dwell_events?: CanonicalDwellEvent[];
   structured_recommendation_reasons?: Array<RecommendationReason | string>;
   selection_decision?: RouteSelectionDecision;
-  [key: string]: unknown;
 }
 
 export interface RouteSelectionDecision {

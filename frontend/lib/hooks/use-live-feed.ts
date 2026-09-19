@@ -45,56 +45,89 @@ export function withLiveFeedNow<T extends { nowMs: number }>(state: T, nowMs: nu
 
 function applySocketMessage(raw: string, setState: React.Dispatch<React.SetStateAction<LiveFeedState>>): void {
   try {
-    const message: unknown = JSON.parse(raw);
-    if (!message || typeof message !== "object") throw new Error("not an object");
-    const payload = message as { type?: unknown; data?: unknown; message?: unknown };
-    if (payload.type === "snapshot" && isLiveFeedSnapshot(payload.data)) {
-      const data = payload.data;
-      setState((previous) => withLiveFeedNow({
-        ...previous,
-        nearestStop: data.nearest_stop ?? null,
-        stops: data.stops ?? [], arrivals: data.arrivals ?? [], alerts: data.alerts ?? [],
-        vehicles: data.vehicles ?? [], signals: data.signals ?? null, incidents: data.incidents ?? [],
-        nearbyIssues: data.nearby_issues ?? [],
-        updatedAt: data.updated_at ?? Math.floor(Date.now() / 1000), degraded: Boolean(data.degraded),
-        debug: data.debug ?? null, isLoading: false, error: null,
-        busGeneration: typeof data.bus_generation === "number" ? data.bus_generation : null,
-      }, Date.now()));
-    } else if (payload.type === "bus_update" && isBusUpdate(payload.data)) {
-      const data = payload.data;
-      setState((previous) => {
-        if (previous.busGeneration !== data.generation) return previous;
-        const subwayArrivals = previous.arrivals.filter((arrival) => arrival.mode !== "bus");
-        return withLiveFeedNow({
-          ...previous,
-          arrivals: [...subwayArrivals, ...data.arrivals].sort(
-            (left, right) => (left.arrival_time ?? 0) - (right.arrival_time ?? 0),
-          ),
-          updatedAt: Math.max(previous.updatedAt ?? 0, data.fetched_at),
-        }, Date.now());
-      });
-    } else if (payload.type === "error") {
-      const error = payload.message;
-      if (typeof error !== "string") throw new Error("missing error message");
-      setState((previous) => withLiveFeedNow({ ...previous, isLoading: false, degraded: true, error }, Date.now()));
+    const message = JSON.parse(raw);
+    if (!(message instanceof Object) || !("type" in message)) throw new Error("not an object");
+    if (message.type === "snapshot" && "data" in message && isLiveFeedSnapshot(message.data)) {
+      applySnapshot(message.data, setState);
+    } else if (message.type === "bus_update" && "data" in message && isBusUpdate(message.data)) {
+      applyBusUpdate(message.data, setState);
+    } else if (message.type === "error") {
+      applyFeedError(message, setState);
     }
   } catch {
     setState((previous) => withLiveFeedNow({ ...previous, isLoading: false, degraded: true, error: "Malformed live feed message" }, Date.now()));
   }
 }
 
-function isLiveFeedSnapshot(value: unknown): value is LiveFeedResponse {
-  return Boolean(value && typeof value === "object" && "arrivals" in value && "updated_at" in value);
+function orEmpty<T>(value: T[] | null | undefined): T[] {
+  return value ?? [];
 }
 
-function isBusUpdate(value: unknown): value is LiveFeedBusUpdate {
-  if (!value || typeof value !== "object") return false;
-  const update = value as Record<string, unknown>;
+function applySnapshot(
+  data: LiveFeedResponse,
+  setState: React.Dispatch<React.SetStateAction<LiveFeedState>>,
+): void {
+  setState((previous) => withLiveFeedNow({
+    ...previous,
+    nearestStop: data.nearest_stop ?? null,
+    stops: orEmpty(data.stops),
+    arrivals: orEmpty(data.arrivals),
+    alerts: orEmpty(data.alerts),
+    vehicles: orEmpty(data.vehicles),
+    signals: data.signals ?? null,
+    incidents: orEmpty(data.incidents),
+    nearbyIssues: orEmpty(data.nearby_issues),
+    updatedAt: data.updated_at ?? Math.floor(Date.now() / 1000),
+    degraded: Boolean(data.degraded),
+    debug: data.debug ?? null,
+    isLoading: false,
+    error: null,
+    busGeneration: data.bus_generation ?? null,
+  }, Date.now()));
+}
+
+function applyBusUpdate(
+  data: LiveFeedBusUpdate,
+  setState: React.Dispatch<React.SetStateAction<LiveFeedState>>,
+): void {
+  setState((previous) => {
+    if (previous.busGeneration !== data.generation) return previous;
+    const subwayArrivals = previous.arrivals.filter((arrival) => arrival.mode !== "bus");
+    return withLiveFeedNow({
+      ...previous,
+      arrivals: [...subwayArrivals, ...data.arrivals].sort(
+        (left, right) => (left.arrival_time ?? 0) - (right.arrival_time ?? 0),
+      ),
+      updatedAt: Math.max(previous.updatedAt ?? 0, data.fetched_at),
+    }, Date.now());
+  });
+}
+
+function applyFeedError<T>(
+  message: T,
+  setState: React.Dispatch<React.SetStateAction<LiveFeedState>>,
+): void {
+  if (!(message instanceof Object) || !("message" in message) || String(message.message) !== message.message) {
+    throw new Error("missing error message");
+  }
+  const error = message.message;
+  setState((previous) => withLiveFeedNow({ ...previous, isLoading: false, degraded: true, error }, Date.now()));
+}
+
+function isLiveFeedSnapshot<T>(value: T): value is T & LiveFeedResponse {
+  return Boolean(value instanceof Object && "arrivals" in value && "updated_at" in value);
+}
+
+function isBusUpdate<T>(value: T): value is T & LiveFeedBusUpdate {
+  if (!(value instanceof Object)) return false;
+  if (!("generation" in value) || !("arrivals" in value) || !("fetched_at" in value) || !("status" in value)) {
+    return false;
+  }
   return (
-    typeof update.generation === "number"
-    && Array.isArray(update.arrivals)
-    && typeof update.fetched_at === "number"
-    && (update.status === "ready" || update.status === "cached" || update.status === "unavailable")
+    Number.isFinite(Number(value.generation))
+    && Array.isArray(value.arrivals)
+    && Number.isFinite(Number(value.fetched_at))
+    && (value.status === "ready" || value.status === "cached" || value.status === "unavailable")
   );
 }
 

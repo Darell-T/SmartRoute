@@ -106,7 +106,8 @@ export function ResponseModeMenu({
     if (!open) return;
     positionMenu();
     const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
+      const target = event.target;
+      if (!(target instanceof Node)) return;
       if (
         !menuRef.current?.contains(target) &&
         !triggerRef.current?.contains(target)

@@ -89,7 +89,7 @@ function titleCaseTransitLabel(value: string): string {
     .join("");
 }
 
-export function cleanDestinationLabel(value: unknown): string {
+export function cleanDestinationLabel(value: string | number | null | undefined): string {
   return titleCaseTransitLabel(String(value ?? "").replace(/\s+/g, " ").trim());
 }
 

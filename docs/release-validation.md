@@ -4,6 +4,32 @@
 immutable candidate SHA. It does not deploy, migrate, restore, or roll back
 SmartRoute. Those platform actions require external, reviewable evidence.
 
+## Repository quality checks
+
+Install `backend/requirements.txt`, `backend/requirements-dev.txt`, and the
+locked frontend dependencies before running these commands from the repository
+root:
+
+```powershell
+python -m ruff check --config pyproject.toml backend
+python scripts/check_quality.py --quality-ref <base-commit>
+npm --prefix frontend run typecheck
+npm --prefix frontend run lint
+npm --prefix frontend run lint:oxlint
+npm --prefix frontend run verify:transit-artifacts
+npm --prefix frontend run build
+```
+
+The quality command runs frontend coverage and backend tests with branch
+coverage. It checks complexity against the saved baseline and the supplied
+Git commit. Existing complexity entries may remain, but new or worsened debt
+fails the check. Do not raise the baseline to accept a change.
+
+CI uses the pull request's base commit for comparison. A push to `main` uses
+the first parent of the pushed commit. The quality job retains its JSON report.
+The frontend job runs Oxlint with warnings denied. The backend job runs Ruff
+and enforces the 85% branch-coverage floor.
+
 ## Deterministic backend suite
 
 These checks do not call Anthropic, Google Routes, Ticketmaster, or another
@@ -54,7 +80,7 @@ deadline, cancellation, or jitter contracts regress.
 ## Transit artifact regeneration
 
 When verifying a builder change, use the same GTFS archive as the checked-in
-artifacts. `frontend/public/subway-network.canonical.geojson` records its
+artifacts. The GTFS network artifact in `frontend/public/` records its
 `metadata.gtfs_zip_sha256`. Set `SMARTROUTE_GTFS_CACHE_DIR` to a directory
 containing that `google_transit.zip`, then run:
 

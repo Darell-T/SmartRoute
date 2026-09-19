@@ -146,7 +146,7 @@ function PromptInputTextarea({
 
     el.style.height = "auto";
 
-    if (typeof maxHeight === "number") {
+    if (maxHeight === Number(maxHeight)) {
       el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
     } else {
       el.style.height = `min(${el.scrollHeight}px, ${maxHeight})`;
@@ -164,7 +164,7 @@ function PromptInputTextarea({
     const el = textareaRef.current;
     el.style.height = "auto";
 
-    if (typeof maxHeight === "number") {
+    if (maxHeight === Number(maxHeight)) {
       el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
     } else {
       el.style.height = `min(${el.scrollHeight}px, ${maxHeight})`;

@@ -1,6 +1,6 @@
-# SmartRoute
+# Domain language
 
-SmartRoute is a real-time NYC transit planner. The backend owns itinerary facts. Conversation may add optional place-queue context without changing those facts.
+SmartRoute is a real-time NYC transit planner. The backend owns trip facts. Conversation may add optional place-queue context without changing those facts.
 
 ## Language
 
@@ -8,7 +8,7 @@ SmartRoute is a real-time NYC transit planner. The backend owns itinerary facts.
 The person asking for transit or destination help in the current conversation.
 _Avoid_: User, customer, client
 
-**Canonical itinerary**:
+**Server-owned trip**:
 The one server-owned trip record for duration, timing, transfers, walking, stops, and dwell.
 _Avoid_: Frontend-calculated trip, reconstructed route
 

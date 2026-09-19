@@ -274,7 +274,7 @@ test("left rail uses restrained transit product surfaces", () => {
   );
   assert.match(
     routeView,
-    /onRequestRailExpand\?\.\(\);\s+onWayChange\(value as ArrivalFilter\);/,
+    /onRequestRailExpand\?\.\(\);\s+onWayChange\(value\);/,
     "nearby transit direction changes should expand the mobile sheet before filtering rows",
   );
   assert.doesNotMatch(

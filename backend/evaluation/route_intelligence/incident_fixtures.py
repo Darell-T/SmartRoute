@@ -1,37 +1,17 @@
-"""Process-local 511NY event snapshots.
-
-This module deliberately has no FastAPI imports and starts no background work
-on import.  The application lifecycle owns ``NY511Poller.start``/``stop`` so a
-deployment can designate one process to poll rather than accidentally adding a
-poller to every worker.  Route-time consumers use ``SnapshotStore.get_snapshot``
-only; they never need the upstream API key or make a live request.
-"""
+"""Read historical 511NY fixtures for offline route comparison tests."""
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import json
 import math
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
-import httpx
 from pydantic import BaseModel, Field
 
-from app import runtime
-
-DEFAULT_API_URL = "https://511ny.org/api/v2/get/event"
-DEFAULT_POLL_INTERVAL_SECONDS = 300.0
-DEFAULT_TIMEOUT_SECONDS = 10.0
-DEFAULT_STALE_AFTER_SECONDS = 900.0
-DEFAULT_MAX_STALE_SECONDS = 3600.0
 NYC_BOUNDS = (40.45, 40.95, -74.30, -73.65)
 DEFAULT_NYC_BUFFER_DEGREES = 0.05
-MAX_ATTEMPTS = 3
 NYC_COUNTIES = {"bronx", "kings", "new york", "queens", "richmond"}
 KNOWN_NON_NYC_COUNTIES = {
     "albany", "allegany", "bronx", "broome", "cattaraugus", "cayuga",
@@ -85,117 +65,12 @@ class IncidentSnapshot(BaseModel):
     last_error: str | None = None
 
 
-def _finite_env_float(name: str, default: float) -> float:
-    value = float(os.getenv(name, default))
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be finite")
-    return value
-
-
-def _validated_ny511_url(api_url: str) -> str | None:
-    parsed = urlsplit(api_url)
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname not in {"511ny.org", "www.511ny.org"}
-        or parsed.query
-        or parsed.fragment
-        or parsed.username
-        or parsed.password
-    ):
-        return None
-    return api_url
-
-
-def _ny511_timing() -> tuple[float, float, float, float, float] | None:
-    try:
-        poll_interval = max(
-            60.0,
-            _finite_env_float("NY511_POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS),
-        )
-        timeout = max(
-            1.0,
-            _finite_env_float("NY511_REQUEST_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS),
-        )
-        stale_after = max(
-            1.0,
-            _finite_env_float("NY511_STALE_AFTER_SECONDS", DEFAULT_STALE_AFTER_SECONDS),
-        )
-        max_stale = max(
-            stale_after,
-            _finite_env_float("NY511_MAX_STALE_SECONDS", DEFAULT_MAX_STALE_SECONDS),
-        )
-        buffer = max(
-            0.0,
-            min(
-                0.25,
-                _finite_env_float("NY511_NYC_BUFFER_DEGREES", DEFAULT_NYC_BUFFER_DEGREES),
-            ),
-        )
-    except ValueError:
-        return None
-    return poll_interval, timeout, stale_after, max_stale, buffer
-
-
-def _ny511_mode(
-    enabled: bool,
-    fixture_path: str | None,
-    runtime_environment: str,
-    key: str | None,
-) -> tuple[str | None, str | None, bool]:
-    if not enabled:
-        return "source disabled", None, False
-    if fixture_path:
-        if runtime_environment not in {"development", "dev", "test", "testing"}:
-            return (
-                "511NY fixture mode requires a development or test environment",
-                None,
-                False,
-            )
-        return "using development 511NY fixture", fixture_path, True
-    if not key:
-        return "API key not configured", None, False
-    return None, None, True
-
-
 @dataclass(frozen=True)
-class NY511Settings:
-    api_key: str | None
-    enabled: bool
-    api_url: str = DEFAULT_API_URL
-    poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS
-    request_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
-    stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS
-    max_stale_seconds: float = DEFAULT_MAX_STALE_SECONDS
+class SnapshotSettings:
+    stale_after_seconds: float = 900.0
+    max_stale_seconds: float = 3600.0
     nyc_buffer_degrees: float = DEFAULT_NYC_BUFFER_DEGREES
     diagnostic: str | None = None
-    fixture_path: str | None = None
-
-    @classmethod
-    def from_env(cls) -> NY511Settings:
-        """Read optional server settings without making missing config fatal."""
-        key = (os.getenv("NY511_API_KEY") or "").strip() or None
-        raw_enabled = (os.getenv("NY511_ENABLED") or "true").strip().lower()
-        enabled = raw_enabled not in {"0", "false", "no", "off"}
-        fixture_path = (os.getenv("NY511_FIXTURE_PATH") or "").strip() or None
-        api_url = (os.getenv("NY511_API_BASE_URL") or DEFAULT_API_URL).strip()
-        runtime_environment = runtime.runtime_profile()
-        validated_url = _validated_ny511_url(api_url)
-        if validated_url is None:
-            return cls(api_key=key, enabled=False, diagnostic="invalid API base URL")
-        timing = _ny511_timing()
-        if timing is None:
-            return cls(api_key=key, enabled=False, diagnostic="invalid 511NY numeric configuration")
-        diagnostic, fixture_path, enabled = _ny511_mode(
-            enabled, fixture_path, runtime_environment, key
-        )
-        return cls(key, enabled, validated_url, *timing, diagnostic, fixture_path)
-
-
-class NY511FetchError(Exception):
-    def __init__(self, message: str, *, retryable: bool, retry_after_seconds: float | None = None) -> None:
-        super().__init__(message)
-        self.retryable = retryable
-        self.retry_after_seconds = retry_after_seconds
 
 
 def _text(value: Any) -> str | None:
@@ -370,80 +245,10 @@ def _normalize_events(
     return list(incidents.values()), invalid_record_count
 
 
-def _parse_event_payload(response: httpx.Response) -> list[Any]:
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise NY511FetchError("511NY returned malformed JSON", retryable=False) from exc
-    if not isinstance(payload, list):
-        raise NY511FetchError("511NY returned an unexpected event schema", retryable=False)
-    return payload
-
-
-def _http_fetch_error(response: httpx.Response) -> NY511FetchError:
-    retryable = response.status_code == 429 or response.status_code >= 500
-    retry_after = None
-    if response.status_code == 429:
-        try:
-            retry_after = float(response.headers.get("Retry-After", ""))
-        except (AttributeError, TypeError, ValueError):
-            retry_after = None
-    return NY511FetchError(
-        f"511NY request failed with HTTP {response.status_code}",
-        retryable=retryable,
-        retry_after_seconds=retry_after,
-    )
-
-
-def _backoff_seconds(last_error: NY511FetchError, attempt: int) -> float:
-    # A 429 receives the provider delay when supplied, never shorter
-    # than the 6 seconds implied by its 10-calls-per-minute budget.
-    # Other transient failures use a small bounded exponential backoff.
-    delay = 0.5 * (2**attempt)
-    if last_error.retry_after_seconds is not None:
-        return max(6.0, min(60.0, last_error.retry_after_seconds))
-    if "HTTP 429" in str(last_error):
-        return 6.0
-    return delay
-
-
-class NY511Client:
-    def __init__(self, settings: NY511Settings, *, max_attempts: int = MAX_ATTEMPTS) -> None:
-        self._settings = settings
-        self._max_attempts = max(1, min(MAX_ATTEMPTS, int(max_attempts)))
-
-    async def fetch_events(self) -> list[Any]:
-        if not self._settings.enabled or not self._settings.api_key:
-            raise NY511FetchError("511NY source is disabled", retryable=False)
-        last_error: NY511FetchError | None = None
-        for attempt in range(self._max_attempts):
-            try:
-                async with httpx.AsyncClient(  # noqa: TID251
-                    timeout=self._settings.request_timeout_seconds
-                ) as client:
-                    response = await client.get(
-                        self._settings.api_url,
-                        params={"key": self._settings.api_key, "format": "json"},
-                    )
-                if response.status_code == 200:
-                    return _parse_event_payload(response)
-                last_error = _http_fetch_error(response)
-            except httpx.TimeoutException:
-                last_error = NY511FetchError("511NY request timed out", retryable=True)
-            except httpx.RequestError:
-                last_error = NY511FetchError("511NY connection failed", retryable=True)
-
-            if last_error is None or not last_error.retryable or attempt == self._max_attempts - 1:
-                break
-            await asyncio.sleep(_backoff_seconds(last_error, attempt))
-        assert last_error is not None
-        raise last_error
-
-
 class SnapshotStore:
-    """Async-safe latest-successful snapshot storage for one application process."""
+    """Keep fixture snapshots and reproduce their age at replay time."""
 
-    def __init__(self, settings: NY511Settings) -> None:
+    def __init__(self, settings: SnapshotSettings) -> None:
         self._settings = settings
         self._lock = asyncio.Lock()
         self._snapshot: IncidentSnapshot | None = None
@@ -461,9 +266,7 @@ class SnapshotStore:
             records, nyc_buffer_degrees=self._settings.nyc_buffer_degrees
         )
         if records and invalid_record_count == len(records):
-            raise NY511FetchError(
-                "511NY response contained no usable event records", retryable=False
-            )
+            raise ValueError("511NY fixture contained no usable event records")
         snapshot = IncidentSnapshot(
             incidents=incidents,
             fetched_at=fetched_at,
@@ -506,78 +309,3 @@ class SnapshotStore:
         return snapshot
 
 
-class NY511Poller:
-    """Single-flight scheduled refresher for a process-local ``SnapshotStore``."""
-
-    def __init__(self, settings: NY511Settings | None = None, *, client: NY511Client | None = None, store: SnapshotStore | None = None) -> None:
-        self.settings = settings or NY511Settings.from_env()
-        self.store = store or SnapshotStore(self.settings)
-        self.client = client or NY511Client(self.settings)
-        self._refresh_lock = asyncio.Lock()
-        self._stop_event = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
-
-    async def _fixture_records(self) -> list[Any]:
-
-        fixture_path = self.settings.fixture_path
-        if not fixture_path:
-            raise NY511FetchError("511NY fixture path is not configured", retryable=False)
-
-        def _read() -> list[Any]:
-            try:
-                with open(fixture_path, encoding="utf-8") as handle:
-                    payload = json.load(handle)
-            except (OSError, ValueError, TypeError) as exc:
-                raise NY511FetchError("511NY fixture is malformed or unreadable", retryable=False) from exc
-            if not isinstance(payload, list):
-                raise NY511FetchError("511NY fixture has an unexpected event schema", retryable=False)
-            return payload
-
-        return await asyncio.to_thread(_read)
-
-    async def refresh(self) -> bool:
-        """Fetch once, returning false when another refresh is already running."""
-        if self._refresh_lock.locked():
-            return False
-        async with self._refresh_lock:
-            if not self.settings.enabled:
-                await self.store.record_failure(self.settings.diagnostic or "511NY source is disabled")
-                return False
-            try:
-                if self.settings.fixture_path:
-                    records = await self._fixture_records()
-                    await self.store.record_success(records, source_origin="fixture")
-                else:
-                    records = await self.client.fetch_events()
-                    await self.store.record_success(records, source_origin="live")
-            except NY511FetchError as exc:
-                await self.store.record_failure(str(exc))
-            except Exception:  # noqa: BLE001 511 refresh faults stay recorded as failure
-                await self.store.record_failure("511NY refresh failed")
-            else:
-                return True
-            return False
-
-    def start(self) -> asyncio.Task[None] | None:
-        """Schedule immediate and periodic polling once; safe to call repeatedly."""
-        if not self.settings.enabled:
-            return None
-        if self._task is None or self._task.done():
-            self._stop_event.clear()
-            self._task = asyncio.create_task(self._run(), name="ny511-poller")
-        return self._task
-
-    async def stop(self) -> None:
-        self._stop_event.set()
-        if self._task is None:
-            return
-        self._task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._task
-        self._task = None
-
-    async def _run(self) -> None:
-        while not self._stop_event.is_set():
-            await self.refresh()
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._stop_event.wait(), timeout=self.settings.poll_interval_seconds)

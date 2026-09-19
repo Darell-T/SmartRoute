@@ -152,7 +152,7 @@ function locatedStopFeatures(
   const snap = Boolean(lineCoords && lineCoords.length >= 2);
   const features: GeoJSON.Feature<GeoJSON.Point, RouteStopProps>[] = [];
   for (const stop of located) {
-    if (typeof stop.lat !== "number" || typeof stop.lng !== "number") continue;
+    if (!Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) continue;
     const raw: [number, number] = [stop.lng, stop.lat];
     const coordinates = snap && lineCoords ? nearestPointOnPolyline(lineCoords, raw) : raw;
     features.push(stopPoint(coordinates, stop.name, color, line, false));
@@ -208,7 +208,7 @@ function stepStopFeatures(
   if (!coords) return [];
   const names = step.intermediate_stops ?? [];
   if (names.length >= 2) return interpolatedStopFeatures(names, coords, color, line);
-  const stopCount = typeof step.stop_count === "number" ? step.stop_count : 0;
+  const stopCount = step.stop_count ?? 0;
   const count = stopCount + 1;
   return count >= 2 ? countedStopFeatures(count, coords, color, line) : [];
 }

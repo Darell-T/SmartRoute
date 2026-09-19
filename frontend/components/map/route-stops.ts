@@ -28,6 +28,12 @@ function routeStopColorFor(step: RouteStep): string {
   return step.line_color || getLineColor(step.train_line || step.route_id || "");
 }
 
+function geojsonSource(map: maplibregl.Map, sourceId: string): maplibregl.GeoJSONSource | undefined {
+  const source = map.getSource(sourceId);
+  // SAFETY: callers only pass source ids created with type "geojson".
+  return source as maplibregl.GeoJSONSource | undefined;
+}
+
 function ensureSource(map: maplibregl.Map, id: string) {
   if (!map.getSource(id)) {
     map.addSource(id, { type: "geojson", data: EMPTY });
@@ -130,18 +136,18 @@ export function ensureRouteStopLayers(map: maplibregl.Map) {
 
 export function setRouteStopData(map: maplibregl.Map, steps: RouteStep[]) {
   ensureRouteStopLayers(map);
-  const stops = map.getSource(ROUTE_STOPS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-  const walk = map.getSource(ROUTE_WALK_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-  const transit = map.getSource(ROUTE_TRANSIT_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+  const stops = geojsonSource(map, ROUTE_STOPS_SOURCE_ID);
+  const walk = geojsonSource(map, ROUTE_WALK_SOURCE_ID);
+  const transit = geojsonSource(map, ROUTE_TRANSIT_SOURCE_ID);
   stops?.setData(buildRouteStopFeatures(steps, routeStopColorFor));
   walk?.setData(buildWalkFeatures(steps));
   transit?.setData(buildTransitPathFeatures(steps, routeStopColorFor));
 }
 
 export function clearRouteStopData(map: maplibregl.Map) {
-  const stops = map.getSource(ROUTE_STOPS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-  const walk = map.getSource(ROUTE_WALK_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-  const transit = map.getSource(ROUTE_TRANSIT_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+  const stops = geojsonSource(map, ROUTE_STOPS_SOURCE_ID);
+  const walk = geojsonSource(map, ROUTE_WALK_SOURCE_ID);
+  const transit = geojsonSource(map, ROUTE_TRANSIT_SOURCE_ID);
   stops?.setData(EMPTY);
   walk?.setData(EMPTY);
   transit?.setData(EMPTY);

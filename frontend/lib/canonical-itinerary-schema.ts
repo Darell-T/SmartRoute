@@ -360,7 +360,7 @@ export const canonicalItinerarySchema = itineraryPayloadSchema.transform(
   },
 );
 
-export function parseCanonicalItinerary(value: unknown): ValidatedCanonicalItinerary | null {
+export function parseCanonicalItinerary<T>(value: T): ValidatedCanonicalItinerary | null {
   const parsed = canonicalItinerarySchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }

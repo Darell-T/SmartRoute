@@ -17,6 +17,15 @@ export function artifactUrl(name: string): string {
   return version ? `/${name}?v=${version}` : `/${name}`;
 }
 
+export function parseFeatureCollection<T>(data: T): GeoJSON.FeatureCollection | null {
+  if (!(data instanceof Object) || !("type" in data) || !("features" in data)) return null;
+  if (data.type !== "FeatureCollection" || !Array.isArray(data.features) || data.features.length === 0) {
+    return null;
+  }
+  // SAFETY: MapLibre sources accept a FeatureCollection; type and features[] were checked above.
+  return data as GeoJSON.FeatureCollection;
+}
+
 export async function loadVisualSubwayNetworkOrNull(): Promise<GeoJSON.FeatureCollection | null> {
   try {
     const response = await fetch(
@@ -28,11 +37,7 @@ export async function loadVisualSubwayNetworkOrNull(): Promise<GeoJSON.FeatureCo
         `Failed to load visual subway network: ${response.status} ${response.statusText}`,
       );
     }
-    const doc = (await response.json()) as GeoJSON.FeatureCollection;
-    if (!doc || !Array.isArray(doc.features) || doc.features.length === 0) {
-      return null;
-    }
-    return doc;
+    return parseFeatureCollection(await response.json());
   } catch (error) {
     if (DEBUG_LIVE_MAP) {
       // eslint-disable-next-line no-console
@@ -56,11 +61,7 @@ export async function loadSubwayStationAnchorsOrNull(): Promise<GeoJSON.FeatureC
         `Failed to load station anchors: ${response.status} ${response.statusText}`,
       );
     }
-    const doc = (await response.json()) as GeoJSON.FeatureCollection;
-    if (!doc || !Array.isArray(doc.features) || doc.features.length === 0) {
-      return null;
-    }
-    return doc;
+    return parseFeatureCollection(await response.json());
   } catch (error) {
     if (DEBUG_LIVE_MAP) {
       // eslint-disable-next-line no-console
@@ -94,7 +95,7 @@ const mapFeatureArrayPropertySchema = z
   )
   .catch([]);
 
-export function mapFeatureArrayProperty(value: unknown): string[] {
+export function mapFeatureArrayProperty<T>(value: T): string[] {
   return mapFeatureArrayPropertySchema.parse(value);
 }
 

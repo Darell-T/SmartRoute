@@ -23,9 +23,9 @@ export function flyToRoute(
 
   const bounds = new maplibregl.LngLatBounds();
   validCoords.forEach((coord) => bounds.extend(coord));
-  const reducedMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const reducedMotion = Boolean(
+    globalThis.window?.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+  );
   m.fitBounds(bounds, {
     padding: routePreviewPadding(m),
     duration: reducedMotion ? 0 : options.duration ?? 850,
@@ -39,7 +39,7 @@ export function flyToRoute(
 function routePreviewPadding(m: maplibregl.Map): maplibregl.PaddingOptions {
   const width =
     m.getContainer().clientWidth ||
-    (typeof window !== "undefined" ? window.innerWidth : 1440);
+    (globalThis.window?.innerWidth ?? 1440);
 
   if (width < 760) {
     const sheetHeight = readMobileSheetHeight();
@@ -63,7 +63,7 @@ function routePreviewPadding(m: maplibregl.Map): maplibregl.PaddingOptions {
 }
 
 function readMobileSheetHeight() {
-  if (typeof window === "undefined") return MOBILE_DEFAULT_SHEET_PADDING;
+  if (!globalThis.window) return MOBILE_DEFAULT_SHEET_PADDING;
 
   const raw = window
     .getComputedStyle(document.documentElement)

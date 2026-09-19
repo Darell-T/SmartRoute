@@ -17,11 +17,11 @@ export function buildStation(liveFeed: Partial<LiveFeedResponse> | null | undefi
   };
 }
 
-const NETWORK_HEALTH_STATUS = {
-  disrupted: "disrupted",
-  caution: "minor",
-  healthy: "clear",
-} as const;
+function networkHealthStatus(rawStatus: string): NetworkHealth["status"] {
+  if (rawStatus === "disrupted") return "disrupted";
+  if (rawStatus === "caution") return "minor";
+  return "clear";
+}
 
 function monitoredRouteIds(liveFeed: Partial<LiveFeedResponse> | null | undefined): string[] {
   return Array.from(
@@ -51,7 +51,7 @@ export function buildHealth(liveFeed: Partial<LiveFeedResponse> | null | undefin
   const rawStatus = signals?.network_status ?? (liveFeed?.degraded ? "caution" : "healthy");
   const affected = monitoredRouteIds(liveFeed);
   return {
-    status: NETWORK_HEALTH_STATUS[rawStatus as keyof typeof NETWORK_HEALTH_STATUS] ?? "clear",
+    status: networkHealthStatus(rawStatus),
     ...healthSignalCounts(signals ?? undefined, liveFeed?.alerts?.length ?? 0, affected.length),
     summary: `${affected.length || "Nearby"} subway routes are being monitored inside a half-mile radius.`,
     affected: affected.slice(0, 12),

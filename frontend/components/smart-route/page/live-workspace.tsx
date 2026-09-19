@@ -60,6 +60,7 @@ export function LiveWorkspace({
     syncMobileRailAppState(mobileRailAppState);
   }, [mobileRailAppState, syncMobileRailAppState]);
 
+  // SAFETY: React CSSProperties omits custom properties used by the mobile sheet stylesheet.
   const liveRailShellStyle = {
     position: "absolute",
     top: 14,

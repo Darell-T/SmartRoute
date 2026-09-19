@@ -6,7 +6,6 @@ from app.services.trips.route_incidents.context import extract_candidate_stop_co
 from app.services.trips.route_incidents.matching import (
     MAX_SEARCH_RADIUS_MILES,
     MILES_TO_METERS,
-    Cached511NYSearchTool,
     _geometry_components,
     incident_points,
     match_cached_incidents,
@@ -24,14 +23,6 @@ class _IncidentModel(BaseModel):
     description: str | None = None
 
 
-class _SnapshotModel(BaseModel):
-    incidents: list[dict]
-    status: str
-    fetched_at: datetime | None = None
-    last_successful_fetch_at: datetime | None = None
-    source_record_count: int = 0
-    nyc_record_count: int = 0
-    source_origin: str | None = None
 
 
 class IncidentGeometryTests(unittest.TestCase):
@@ -228,37 +219,7 @@ class IncidentMatchingTests(unittest.TestCase):
     def test_invalid_incident_coordinates_are_rejected(self):
         assert match_cached_incidents([{"source_id": "bad", "latitude": 0, "longitude": 0}], self.stops) == []
 
-    def test_controlled_tool_rejects_unbounded_or_unsafe_arguments_and_never_needs_upstream(self):
-        calls = []
 
-        def snapshot():
-            calls.append(True)
-            return {"incidents": [{"source_id": "near", "latitude": 40.6502, "longitude": -73.9630}]}
-
-        tool = Cached511NYSearchTool(snapshot, self.stops)
-        assert tool.execute({"candidate_route_ids": ["candidate-0"], "url": "https://bad.example"})["status"] == "invalid_arguments"
-        assert tool.execute({"candidate_route_ids": ["candidate-0"], "radius_miles": 1})["status"] == "invalid_arguments"
-        assert tool.execute({"candidate_route_ids": ["candidate-0"], "radius_miles": float("nan")})["status"] == "invalid_arguments"
-        result = tool.execute({"candidate_route_ids": ["candidate-0"], "radius_miles": 0.5})
-        assert result["status"] == "complete"
-        assert len(calls) == 1
-        assert result["incidents"][0]["affected_candidate_route_ids"] == ["candidate-0"]
-
-    def test_controlled_tool_propagates_snapshot_metadata_and_unavailable_state(self):
-        now = datetime(2026, 7, 22, tzinfo=UTC)
-        stale = _SnapshotModel(
-            incidents=[{"source_id": "near", "latitude": 40.6502, "longitude": -73.9630}],
-            status="stale", fetched_at=now, last_successful_fetch_at=now - timedelta(minutes=20),
-            source_record_count=4, nyc_record_count=2, source_origin="fixture",
-        )
-        result = Cached511NYSearchTool(lambda: stale, self.stops).execute({"candidate_route_ids": ["candidate-0"]})
-        assert result["status"] == "complete"
-        assert result["snapshot"]["status"] == "stale"
-        assert result["snapshot"]["nyc_record_count"] == 2
-        assert result["snapshot"]["source_origin"] == "fixture"
-        unavailable = _SnapshotModel(incidents=[], status="unavailable")
-        result = Cached511NYSearchTool(lambda: unavailable, self.stops).execute({"candidate_route_ids": ["candidate-0"]})
-        assert result == {"incidents": [], "status": "unavailable", "snapshot": {"status": "unavailable", "source_record_count": 0, "nyc_record_count": 0}}
 
 
 class IncidentMergeTests(unittest.TestCase):

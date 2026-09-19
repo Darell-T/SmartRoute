@@ -47,8 +47,8 @@ export function prepareRouteSubmit(
   return { ok: true, destination };
 }
 
-export function planningErrorText(error: unknown): string {
-  const message = error instanceof Error ? error.message : "Unknown error";
+export function planningErrorText(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : "Unknown error";
   if (message.includes("Failed to plan trip")) {
     return "No route found. Try a more specific address.";
   }

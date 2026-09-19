@@ -658,7 +658,10 @@ function blendWindowOverlap(left: WindowFit, right: WindowFit) {
   const steps = Math.max(1, Math.ceil((end - start) / SAMPLE_M));
   const leftArcs = windowSampleArcs(left);
   const rightArcs = windowSampleArcs(right);
-  const blended: { yellow: Position[]; orange: Position[] } = { yellow: [], orange: [] };
+  const blended = {
+    yellow: new Array<Position>(),
+    orange: new Array<Position>(),
+  };
   for (let i = 0; i <= steps; i += 1) {
     const t = i / steps;
     const arc = start + (end - start) * t;

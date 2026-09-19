@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { parseAgentEvent } from "./event-validator";
+import { parseAgentEvent, type AgentEventPayload } from "./event-validator";
 import type { AgentSource, ArrivalCardEvent, RouteCard } from "./stream";
 import {
   arrivalsFromEvent,
@@ -187,7 +187,7 @@ async function parseSnapshot(response: Response): Promise<SessionSnapshot | null
   };
 }
 
-function parseSnapshotRouteCards(cards: Record<string, unknown>[]): RouteCard[] {
+function parseSnapshotRouteCards(cards: AgentEventPayload[]): RouteCard[] {
   const routeCards: RouteCard[] = [];
   for (const card of cards) {
     // Cards are revalidated at this boundary exactly like live SSE events;
@@ -200,7 +200,7 @@ function parseSnapshotRouteCards(cards: Record<string, unknown>[]): RouteCard[] 
   return routeCards;
 }
 
-function parseSnapshotArrivalCards(cards: Record<string, unknown>[]): ArrivalCardEvent[] {
+function parseSnapshotArrivalCards(cards: AgentEventPayload[]): ArrivalCardEvent[] {
   const arrivalCards: ArrivalCardEvent[] = [];
   for (const card of cards) {
     const parsed = parseAgentEvent("arrival_card", card);

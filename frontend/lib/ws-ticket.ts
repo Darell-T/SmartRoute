@@ -40,7 +40,7 @@ const PROD_API_FALLBACK = "https://jarvis-mta-assistant.onrender.com";
 let serverWsBaseUrl: string | null = null;
 
 function isLocalBrowserHost(): boolean {
-  if (typeof window === "undefined") return true;
+  if (!globalThis.window) return true;
   return /^(localhost|127\.0\.0\.1|0\.0\.0\.0)$/.test(window.location.hostname);
 }
 

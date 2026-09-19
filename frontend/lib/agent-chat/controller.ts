@@ -95,9 +95,9 @@ function shouldBufferStreamEvent(
   return sessionExpired;
 }
 
-function transportErrorFromUnknown(err: unknown): AgentChatTransportError {
-  return err instanceof AgentChatTransportError
-    ? err
+function transportErrorFromUnknown(cause: unknown): AgentChatTransportError {
+  return cause instanceof AgentChatTransportError
+    ? cause
     : new AgentChatTransportError(GENERIC_TRANSPORT_MESSAGE, 500, true, null);
 }
 

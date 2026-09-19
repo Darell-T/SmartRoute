@@ -11,7 +11,7 @@ be normalized before they reach React markup.
 - `destination-suggestions.tsx` owns destination combobox suggestion markup.
 - `live-data.ts` and `live-data/` own nearby transit, route planning, arrivals, and loading-status adapters.
 - `alerts/` owns service-alert feed adapters and alert views.
-- `route-view/` owns the Route tab, destination input, itinerary, nearby panel, and display-compat helpers.
+- `route-view/` owns the Route tab, destination input, trip, nearby panel, and display-compat helpers.
 - Cross-cutting tests stay here: `hydration.test.mjs`, `coverage-tail.test.mjs`, `nearby-arrivals-edges.test.mjs`.
 
 ## Display adapters

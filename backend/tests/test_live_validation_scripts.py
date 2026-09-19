@@ -8,42 +8,11 @@ import unittest
 from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 
-from app.services.incidents.ny511 import NY511Settings
 from scripts.live_checks import advisor as advisor_script
 from scripts.live_checks import anthropic_agent as anthropic_script
 from scripts.live_checks import crowd_search as crowd_search_script
 from scripts.live_checks import google_routes as google_routes_script
-from scripts.live_checks import ny511 as ny511_script
 from scripts.live_checks import ticketmaster as ticketmaster_script
-
-
-class Live511NYCertificationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_missing_key_skips_without_constructing_or_fetching(self):
-        settings = NY511Settings(api_key=None, enabled=False, diagnostic="API key not configured")
-        result = await ny511_script.certify(settings)
-        assert result == {"status": "skipped", "reason": "NY511_API_KEY is not configured"}
-
-    async def test_certification_fetches_once_then_only_searches_local_snapshot(self):
-        settings = NY511Settings(api_key="secret-key", enabled=True, request_timeout_seconds=1.0)
-        event = {"ID": "event-1", "Latitude": 40.7128, "Longitude": -74.006, "County": "New York"}
-        with patch("app.services.incidents.ny511.NY511Client.fetch_events", new=AsyncMock(return_value=[event])) as fetch:
-            result = await ny511_script.certify(settings)
-        assert fetch.await_count == 1
-        assert result["status"] == "passed"
-        assert not result["route_request_made_upstream_fetch"]
-        assert result["nyc_record_count"] == 1
-        assert "secret-key" not in str(result)
-
-    async def test_certification_does_not_retry_a_failed_live_request(self):
-        settings = NY511Settings(api_key="secret-key", enabled=True, request_timeout_seconds=1.0)
-        with patch(
-            "app.services.incidents.ny511.NY511Client.fetch_events",
-            new=AsyncMock(side_effect=RuntimeError("key=secret-key")),
-        ) as fetch:
-            result = await ny511_script.certify(settings)
-        assert fetch.await_count == 1
-        assert result["status"] == "failed"
-        assert "secret-key" not in str(result)
 
 
 class LiveTicketmasterCertificationTests(unittest.IsolatedAsyncioTestCase):
@@ -197,7 +166,6 @@ class LiveCertificationCliTests(unittest.TestCase):
     def test_all_clis_require_live_flag_without_starting_async_work(self):
         for module in (
             anthropic_script,
-            ny511_script,
             ticketmaster_script,
             advisor_script,
             crowd_search_script,
@@ -221,14 +189,6 @@ class LiveCertificationCliTests(unittest.TestCase):
         assert "advisor key is not configured" in printed
         assert "ANTHROPIC_API_KEY" not in printed
 
-    def test_failed_live_cli_returns_nonzero_without_exposing_details(self):
-        with patch.object(sys, "argv", ["ny511", "--live"]), patch.object(
-            ny511_script, "certify", new=AsyncMock(return_value={"status": "failed", "reason": "key=secret"})
-        ), patch("builtins.print") as output:
-            assert ny511_script.main() == 1
-        printed = " ".join(str(call) for call in output.call_args_list)
-        assert "511NY live certification" in printed
-        assert "secret" not in printed
 
 
 if __name__ == "__main__":

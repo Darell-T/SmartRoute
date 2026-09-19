@@ -132,12 +132,14 @@ function StopChain({
     ? { duration: 0 }
     : { duration: 0.3, ease: LAYOUT_EASE };
   const routeColor = event.kind === "bus" ? "#5f8fd9" : getRouteColor(event.routeIds[0] ?? "");
+  // SAFETY: React CSSProperties omits custom properties used by the stop-chain stylesheet.
+  const stopChainStyle = { "--sr-route-color": routeColor } as CSSProperties;
 
   return (
     <div
       className="sr-itinerary-card__stop-chain"
       data-expanded={expanded ? "true" : "false"}
-      style={{ "--sr-route-color": routeColor } as CSSProperties}
+      style={stopChainStyle}
     >
       <div className="sr-itinerary-card__chain-track">
         <div className="sr-itinerary-card__chain-row">

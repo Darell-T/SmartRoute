@@ -591,7 +591,7 @@ export async function ensureMtaBulletImages(
   map: maplibregl.Map,
   routeIds: string[],
 ): Promise<void> {
-  if (typeof window === "undefined" || typeof Image === "undefined") return;
+  if (!globalThis.window || !globalThis.Image) return;
   const uniqueRouteIds = [...new Set(routeIds.filter(Boolean))];
 
   await Promise.all(
@@ -634,9 +634,10 @@ function addOrUpdateGeoJsonSource(
   sourceId: string,
   data: GeoJSON.FeatureCollection,
 ) {
-  const existing = map.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+  const existing = map.getSource(sourceId);
   if (existing) {
-    existing.setData(data);
+    // SAFETY: sourceId is created with type "geojson" in this helper.
+    (existing as maplibregl.GeoJSONSource).setData(data);
     return;
   }
 
@@ -683,6 +684,7 @@ function laneOffsetAt(
   fullPerSlotPx: number,
   bakedTopUpPx: number,
 ): maplibregl.ExpressionSpecification {
+  // SAFETY: this array is a MapLibre expression AST, not a runtime conversion.
   return [
     "+",
     ["*", ["coalesce", ["get", "lane_slot"], 0], fullPerSlotPx],
@@ -696,7 +698,7 @@ function laneOffsetAt(
       ],
       bakedTopUpPx,
     ],
-  ] as unknown as maplibregl.ExpressionSpecification;
+  ] as maplibregl.ExpressionSpecification;
 }
 
 // The baked top-up (second arg) peaks across z12.5-14 -- the neighbourhood band
@@ -1044,29 +1046,8 @@ export function ensureSubwayNetworkLayers(
   stationMarkers?: SubwayStationMarkerCollections | null,
 ): void {
   // --- Sources ---
-  if (!map.getSource(SUBWAY_NETWORK_SOURCE_ID)) {
-    map.addSource(SUBWAY_NETWORK_SOURCE_ID, {
-      type: "geojson",
-      data: lanes,
-    });
-  } else {
-    const src = map.getSource(
-      SUBWAY_NETWORK_SOURCE_ID,
-    ) as maplibregl.GeoJSONSource;
-    src.setData(lanes);
-  }
-
-  if (!map.getSource(SUBWAY_STOP_SOURCE_ID)) {
-    map.addSource(SUBWAY_STOP_SOURCE_ID, {
-      type: "geojson",
-      data: stops,
-    });
-  } else {
-    const src = map.getSource(
-      SUBWAY_STOP_SOURCE_ID,
-    ) as maplibregl.GeoJSONSource;
-    src.setData(stops);
-  }
+  addOrUpdateGeoJsonSource(map, SUBWAY_NETWORK_SOURCE_ID, lanes);
+  addOrUpdateGeoJsonSource(map, SUBWAY_STOP_SOURCE_ID, stops);
 
   // --- Glow layer (subtle colored aura, drawn below casing) ---
   if (!map.getLayer(SUBWAY_GLOW_LAYER_ID)) {

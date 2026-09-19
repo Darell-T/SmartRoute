@@ -1457,6 +1457,7 @@ test("runTurn cancellation stays cancellation and still cleans up", async () => 
   const inFlightRef = { current: true };
   const abortControllerRef = { current: controller };
   const transport = async function* (_request, signal) {
+    yield* [];
     controller.abort();
     signal.throwIfAborted();
   };
@@ -1784,6 +1785,7 @@ test("fetchSessionSnapshot restores a validated arrival card onto its turn", asy
 test("runTurn maps a thrown non-transport error onto the generic failure", async () => {
   const actions = [];
   const transport = async function* () {
+    yield* [];
     throw new TypeError("socket hung up");
   };
   await runTurn(

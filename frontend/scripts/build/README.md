@@ -35,8 +35,7 @@ it is not manually edited generated output.
 
 ## Inputs
 
-The build helpers read checked-in public artifacts, GTFS-derived canonical
-network data, OpenData geometry, route color/configuration data, and station
+The build helpers read checked-in public artifacts, GTFS network data, OpenData geometry, route color/configuration data, and station
 point data. Most runtime inputs are under `frontend/public/`; some source and
 configuration files live beside the build scripts.
 
@@ -44,7 +43,7 @@ configuration files live beside the build scripts.
 
 Runtime artifacts are written under `frontend/public/`:
 
-- `subway-network.canonical.geojson`
+- The GTFS network artifact
 - `subway-network.visual.geojson`
 - `subway-network.station-anchors.geojson`
 

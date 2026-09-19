@@ -26,7 +26,7 @@ export type SmartRouteTheme = "dark" | "light";
 /** @deprecated Use SmartRouteTheme for new shared-workspace consumers. */
 export type ChatTheme = SmartRouteTheme;
 
-function isSmartRouteTheme(value: unknown): value is SmartRouteTheme {
+function isSmartRouteTheme(value: string | null): value is SmartRouteTheme {
   return value === "dark" || value === "light";
 }
 

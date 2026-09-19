@@ -3,12 +3,12 @@
 The Agent interprets rider requests and selects capabilities. Backend domain
 services prepare routes, collect evidence, and build passenger results.
 
-Chat and `POST /api/trip` must return the same kind of itinerary. Duration,
+Chat and `POST /api/trip` must return the same kind of trip. Duration,
 arrival time, transfers, walking, stops, and service conditions therefore have
 one owner: `app/services/trips/`. The Agent can choose a prepared candidate
 and supply bounded framing. It cannot calculate or replace those facts.
 
-[How a SmartRoute chat turn stays grounded](../SMARTROUTE_AGENT_PIPELINE.md)
+[How a SmartRoute chat turn stays grounded](../docs/agent-pipeline.md)
 covers the request path, goals, and completion rules.
 [Release validation](../docs/release-validation.md) lists the deterministic
 checks for a change.
@@ -18,7 +18,7 @@ checks for a change.
 | Fact or action | Owner |
 |---|---|
 | Provider response parsing | The provider module under `app/services/` |
-| Route candidates and canonical itinerary facts | `app/services/trips/` |
+| Route candidates and server-owned trip facts | `app/services/trips/` |
 | Incident collection and storage | `app/services/incidents/` |
 | Process-wide realtime transit state | `app/services/live_feed/` |
 | Chat session state and model tool execution | `app/services/agent/` |
@@ -32,7 +32,7 @@ time, dwell, confidence, selection, or rank.
 
 A route appears in chat, a route card, the route steps, and the map. If each
 view calculated its own totals, a rider could see four answers for one trip.
-`app/services/trips/` builds one canonical itinerary. Every consumer reads that
+`app/services/trips/` builds one server-owned trip. Every consumer reads that
 record. The frontend formats it. It does not rebuild it.
 
 Provider data becomes evidence before it affects a route. Google Routes, MTA
@@ -160,8 +160,8 @@ Place discovery keeps Google Places as the physical venue authority.
 and historical patterns for exact Google Place IDs in a manual registry. It
 uses the existing `discover_places` and `present_places` flow, so the public
 tool count remains eight. Provider capture times determine current freshness.
-Queue evidence never enters canonical itinerary arithmetic, cards, steps, or
-maps. The backend emits canonical queue prose and trusted source events only
+Queue evidence never enters server-owned trip arithmetic, cards, steps, or
+maps. The backend emits server-written queue text and trusted source events only
 in the conversation stream.
 
 The model can see eight tools:
@@ -182,7 +182,7 @@ provider or trip owner.
 
 ## Trip package
 
-`app/services/trips/` owns route candidates and the canonical itinerary used
+`app/services/trips/` owns route candidates and the server-owned trip used
 by chat, the trip endpoint, route cards, route steps, and the map.
 
 | Path | Contents |
@@ -193,7 +193,7 @@ by chat, the trip endpoint, route cards, route steps, and the map.
 | `crowds/` | Event and crowd evidence for a trip |
 | `scoring.py` | Deterministic recovery score |
 | `selection_decision.py` | Candidate eligibility and fallback selection |
-| `itinerary.py` | Canonical itinerary construction |
+| Trip response assembly | Builds the server-owned trip from prepared legs |
 | `enrichment.py` | Stop and route enrichment |
 | `transfer_semantics.py` | Transfer identity and timing rules |
 | `location.py` | Neutral place resolution types |
@@ -207,7 +207,7 @@ The same module owns `PreparedLeg`, `AggregatePreparation`, and `PreparedChain`.
 bundle to trip preparation. It supplies Agent location resolution and timing
 callbacks, then converts `RoutePreparationFailure` into a tool failure.
 `preparation/dependencies.py` constructs the provider dependencies for both
-chat and direct trip requests. Neither adapter replaces canonical itinerary
+chat and direct trip requests. Neither adapter replaces server-owned trip
 calculations.
 
 The Agent route adapter keeps single-leg aggregate conversion in
@@ -263,14 +263,17 @@ An empty result does not prove that a route is clear when a source is missing.
 | `scripts/run_incident_refresh.py` | One deployed incident refresh cycle |
 
 The production request path does not import evaluation modules.
+Historical 511NY fixtures use `evaluation/route_intelligence/incident_fixtures.py`.
+The network client, poller, and live-check command have been removed.
+The local matcher remains for replay comparisons and its evidence object adapter.
 
 ## Frontend contract boundary
 
 `frontend/lib/agent-chat/event-validator.ts` validates streamed events before
-chat state accepts them. `frontend/lib/canonical-itinerary-schema.ts` validates
-the canonical itinerary. Invalid optional route-card fields can be omitted
+chat state accepts them. The trip-response schema in `frontend/lib/` validates
+the server-owned trip. Invalid optional route-card fields can be omitted
 without dropping valid required card facts. The frontend does not reconstruct
-missing canonical totals from route geometry or prose.
+missing server-provided totals from route geometry or prose.
 
 Chat displays only cards marked `recommended`. Alternatives remain available
 for the map. A completed turn can display its structured results even when the

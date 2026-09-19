@@ -80,7 +80,7 @@ export function NearbyTransitPanel({
             data-active={way === value ? "true" : "false"}
             onClick={() => {
               onRequestRailExpand?.();
-              onWayChange(value as ArrivalFilter);
+              onWayChange(value);
             }}
           >
             <span>{label}</span>

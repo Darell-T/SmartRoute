@@ -89,7 +89,7 @@ const tripResponseSchema = z
     }
   });
 
-export function parseTripResponse(value: unknown): ValidatedTripResponse {
+export function parseTripResponse<T>(value: T): ValidatedTripResponse {
   const parsed = tripResponseSchema.safeParse(value);
   if (!parsed.success) {
     throw new Error(TRIP_PLAN_FAILED);

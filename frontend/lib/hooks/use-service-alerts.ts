@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { shouldApplyServiceAlertPoll } from "../service-alert-poll";
 import { fetchWsTicket, wsUrlWithTicket } from "../ws-ticket";
 import type { ServiceAlertDetail, ServiceAlertsResponse } from "@/types";
@@ -65,6 +65,20 @@ function changedIdsFromMaps(
   return changed;
 }
 
+function parseServiceAlertsResponse<T>(data: T): ServiceAlertsResponse {
+  if (!(data instanceof Object) || !("alerts" in data) || !Array.isArray(data.alerts)) {
+    throw new Error("Service alerts unavailable");
+  }
+  // SAFETY: each alert object comes from the service-alerts contract after alerts[] is present.
+  return {
+    alerts: data.alerts as ServiceAlertDetail[],
+    updated_at: "updated_at" in data ? Number(data.updated_at) : 0,
+    active_count: "active_count" in data ? Number(data.active_count) : data.alerts.length,
+    affected_route_count: "affected_route_count" in data ? Number(data.affected_route_count) : 0,
+    source: "mta",
+  };
+}
+
 async function fetchServiceAlerts(signal?: AbortSignal): Promise<ServiceAlertsResponse> {
   const response = await fetch("/api/service-alerts", {
     method: "GET",
@@ -75,7 +89,61 @@ async function fetchServiceAlerts(signal?: AbortSignal): Promise<ServiceAlertsRe
   if (!response.ok) {
     throw new Error(data?.error || "Service alerts unavailable");
   }
-  return data as ServiceAlertsResponse;
+  return parseServiceAlertsResponse(data);
+}
+
+function applyServiceAlertSocketEvent(
+  event: MessageEvent<string>,
+  applyData: (data: ServiceAlertsResponse, connectionState: ServiceAlertConnectionState, changedAlertIds?: string[]) => void,
+  setState: Dispatch<SetStateAction<ServiceAlertsState>>,
+): void {
+  try {
+    const msg = JSON.parse(event.data);
+    if (!(msg instanceof Object) || !("type" in msg)) return;
+    if (msg.type === "SERVICE_SNAPSHOT" || msg.type === "SERVICE_UPDATE") {
+      applyServiceAlertSnapshot(msg, applyData);
+      return;
+    }
+    if (msg.type === "SERVICE_HEARTBEAT") {
+      applyServiceAlertHeartbeat(msg, setState);
+      return;
+    }
+    if (msg.type === "error" && "message" in msg && String(msg.message) === msg.message) {
+      setState((prev) => ({ ...prev, error: msg.message }));
+    }
+  } catch {
+    setState((prev) => ({
+      ...prev,
+      error: "Malformed service alert stream message",
+    }));
+  }
+}
+
+function applyServiceAlertSnapshot<T>(
+  msg: T,
+  applyData: (data: ServiceAlertsResponse, connectionState: ServiceAlertConnectionState, changedAlertIds?: string[]) => void,
+): void {
+  if (!(msg instanceof Object) || !("data" in msg)) return;
+  const changedAlertIds =
+    "changed_alert_ids" in msg && Array.isArray(msg.changed_alert_ids)
+      ? msg.changed_alert_ids
+      : undefined;
+  applyData(parseServiceAlertsResponse(msg.data), "open", changedAlertIds);
+}
+
+function applyServiceAlertHeartbeat<T>(
+  msg: T,
+  setState: Dispatch<SetStateAction<ServiceAlertsState>>,
+): void {
+  const updatedAt =
+    msg instanceof Object && "updated_at" in msg && Number.isFinite(Number(msg.updated_at))
+      ? Number(msg.updated_at)
+      : undefined;
+  setState((prev) => ({
+    ...prev,
+    connectionState: "open",
+    updatedAt: updatedAt ?? prev.updatedAt,
+  }));
 }
 
 export function useServiceAlerts(pollMs = 60_000): ServiceAlertsState {
@@ -217,41 +285,7 @@ export function useServiceAlerts(pollMs = 60_000): ServiceAlertsState {
         setState((prev) => ({ ...prev, connectionState: "open", error: null }));
       };
 
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data) as
-            | {
-                type: "SERVICE_SNAPSHOT" | "SERVICE_UPDATE";
-                data: ServiceAlertsResponse;
-                changed_alert_ids?: string[];
-              }
-            | { type: "SERVICE_HEARTBEAT"; updated_at?: number }
-            | { type: "error"; message: string };
-
-          if (msg.type === "SERVICE_SNAPSHOT" || msg.type === "SERVICE_UPDATE") {
-            applyData(msg.data, "open", msg.changed_alert_ids);
-            return;
-          }
-
-          if (msg.type === "SERVICE_HEARTBEAT") {
-            setState((prev) => ({
-              ...prev,
-              connectionState: "open",
-              updatedAt: msg.updated_at ?? prev.updatedAt,
-            }));
-            return;
-          }
-
-          if (msg.type === "error") {
-            setState((prev) => ({ ...prev, error: msg.message }));
-          }
-        } catch {
-          setState((prev) => ({
-            ...prev,
-            error: "Malformed service alert stream message",
-          }));
-        }
-      };
+      ws.onmessage = (event) => applyServiceAlertSocketEvent(event, applyData, setState);
 
       ws.onclose = () => {
         wsRef.current = null;

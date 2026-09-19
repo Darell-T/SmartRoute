@@ -1,7 +1,7 @@
-"""Deterministic local matching of cached 511NY incidents to route stops.
+"""Match historical incident fixtures to route stops.
 
-No function here fetches 511NY (or accepts URLs, credentials, or arbitrary
-geography).  The only searchable geography is the supplied candidate context.
+Replay comparisons use this matcher. The evidence merger also uses its object
+adapter. Searches stay inside the supplied route context and make no requests.
 """
 
 from __future__ import annotations
@@ -23,26 +23,7 @@ MILES_TO_METERS = 1609.344
 DEFAULT_SEARCH_RADIUS_MILES = 0.5
 MAX_SEARCH_RADIUS_MILES = 0.5
 MAX_NEARBY_STOP_MATCHES = 8
-MAX_TOOL_INCIDENTS = 50
 
-LOCAL_511NY_SEARCH_TOOL_SCHEMA = {
-    "name": "search_cached_511ny_incidents",
-    "description": "Search the current locally cached 511NY snapshot near the current route candidates. No upstream request is made.",
-    "input_schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["candidate_route_ids"],
-        "properties": {
-            "candidate_route_ids": {
-                "type": "array", "minItems": 1, "maxItems": 12,
-                "items": {"type": "string", "minLength": 1, "maxLength": 80},
-            },
-            "radius_miles": {
-                "type": "number", "minimum": 0.01, "maximum": MAX_SEARCH_RADIUS_MILES,
-            },
-        },
-    },
-}
 
 
 def _as_mapping(value: object) -> Mapping[str, Any] | None:
@@ -254,24 +235,6 @@ def _bounded_text(value: object, limit: int) -> str | None:
     return text[:limit] or None
 
 
-def _snapshot_metadata(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return a small, JSON-safe snapshot status record for the model."""
-    if snapshot is None:
-        return {"status": "fresh"}
-    metadata: dict[str, Any] = {
-        "status": str(snapshot.get("status") or "fresh").lower(),
-        "source_record_count": snapshot.get("source_record_count"),
-        "nyc_record_count": snapshot.get("nyc_record_count"),
-    }
-    source_origin = snapshot.get("source_origin")
-    if source_origin in {"live", "fixture"}:
-        metadata["source_origin"] = source_origin
-    for key in ("fetched_at", "last_successful_fetch_at"):
-        value = snapshot.get(key)
-        if value is None:
-            continue
-        metadata[key] = value.isoformat() if hasattr(value, "isoformat") else str(value)[:64]
-    return {key: value for key, value in metadata.items() if value is not None}
 
 
 @dataclass(frozen=True)
@@ -459,73 +422,3 @@ def match_cached_incidents(
             continue
         results.append(_matched_incident(item, matches))
     return sorted(results, key=lambda result: (result.nearest_stop.distance_meters, result.source_id))
-
-
-def _valid_tool_route_id(value: object) -> bool:
-    return isinstance(value, str) and bool(value.strip()) and len(value) <= 80
-
-
-def _admit_candidate_route_ids(value: object) -> list[str] | None:
-    if not isinstance(value, list) or not value or len(value) > 12:
-        return None
-    if any(not _valid_tool_route_id(item) for item in value):
-        return None
-    return value
-
-
-def _admit_search_radius(value: object) -> float | None:
-    try:
-        radius = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not isfinite(radius) or radius <= 0 or radius > MAX_SEARCH_RADIUS_MILES:
-        return None
-    return radius
-
-
-def _admit_cached_search_arguments(arguments: object) -> tuple[list[str], float] | None:
-    if not isinstance(arguments, Mapping):
-        return None
-    if set(arguments) - {"candidate_route_ids", "radius_miles"}:
-        return None
-    ids = _admit_candidate_route_ids(arguments.get("candidate_route_ids"))
-    radius = _admit_search_radius(arguments.get("radius_miles", DEFAULT_SEARCH_RADIUS_MILES))
-    if ids is None or radius is None:
-        return None
-    return ids, radius
-
-
-class Cached511NYSearchTool:
-    """Validated adapter around a local snapshot getter; never calls upstream."""
-
-    schema = LOCAL_511NY_SEARCH_TOOL_SCHEMA
-
-    def __init__(self, snapshot_getter: Callable[[], object], stops: Iterable[CandidateStopContext]):
-        self._snapshot_getter = snapshot_getter
-        self._stops = list(stops)
-
-    def execute(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        admitted = _admit_cached_search_arguments(arguments)
-        if admitted is None:
-            return {"incidents": [], "status": "invalid_arguments"}
-        ids, radius = admitted
-        snapshot = self._snapshot_getter()
-        snapshot_mapping = _as_mapping(snapshot)
-        snapshot_metadata = _snapshot_metadata(snapshot_mapping)
-        snapshot_status = snapshot_metadata["status"]
-        if snapshot_status not in {"fresh", "stale", "unavailable"}:
-            return {"incidents": [], "status": "unavailable", "snapshot": {"status": "unavailable"}}
-        if snapshot_status == "unavailable":
-            return {"incidents": [], "status": "unavailable", "snapshot": snapshot_metadata}
-        records = snapshot_mapping.get("incidents", []) if snapshot_mapping else snapshot
-        if not isinstance(records, list):
-            return {"incidents": [], "status": "unavailable", "snapshot": {"status": "unavailable"}}
-        matches = match_cached_incidents(
-            records, self._stops, candidate_route_ids=ids, radius_miles=radius
-        )
-        return {
-            "incidents": [match.as_dict() for match in matches[:MAX_TOOL_INCIDENTS]],
-            "status": "complete",
-            "snapshot": snapshot_metadata,
-            "truncated": len(matches) > MAX_TOOL_INCIDENTS,
-        }

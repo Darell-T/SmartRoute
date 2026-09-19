@@ -252,7 +252,7 @@ function SmartRoutePageContent() {
   }, []);
 
   async function toggleFullscreen(target: HTMLElement | null) {
-    if (typeof document === "undefined") return;
+    if (!globalThis.document) return;
     await toggleElementFullscreen(target, {
       element: document.fullscreenElement,
       exit: () => document.exitFullscreen(),

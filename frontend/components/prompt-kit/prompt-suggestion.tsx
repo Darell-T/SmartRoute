@@ -15,12 +15,16 @@ export interface PromptSuggestionProps extends Omit<ButtonProps, "size"> {
   highlight?: string;
 }
 
-const SIZE_CLASS: Record<PromptSuggestionSize, string> = {
+const SIZE_CLASS = {
   default: "h-9 px-4 py-2",
   sm: "h-8 px-3",
   lg: "h-11 px-4",
   icon: "size-9 px-0",
-};
+} as const satisfies Record<PromptSuggestionSize, string>;
+
+function isHighlightableText(children: React.ReactNode): children is string {
+  return String(children) === children;
+}
 
 export function PromptSuggestion({
   className,
@@ -31,7 +35,7 @@ export function PromptSuggestion({
   ...props
 }: PromptSuggestionProps) {
   const content =
-    highlight && typeof children === "string"
+    highlight && isHighlightableText(children)
       ? highlightText(children, highlight)
       : children;
 

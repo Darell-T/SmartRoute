@@ -51,7 +51,8 @@ function buildProxyHeaders(
   request: NextRequest | undefined,
   hasBody: boolean,
 ): Record<string, string> | NextResponse {
-  const headers: Record<string, string> = { "X-App-Key": appKey };
+  const headers: Record<string, string> = {};
+  headers["X-App-Key"] = appKey;
   if (request) {
     const principal = requestPrincipal(request);
     if (!principal) {

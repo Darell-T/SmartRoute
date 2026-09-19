@@ -399,15 +399,6 @@
       "coverage_status": "measured"
     },
     {
-      "id": "python:backend/app/services/incidents/ny511.py:NY511Client.fetch_events#0",
-      "language": "Python",
-      "file": "backend/app/services/incidents/ny511.py",
-      "function": "NY511Client.fetch_events",
-      "complexity": 11,
-      "crap": 11.017641,
-      "coverage_status": "measured"
-    },
-    {
       "id": "python:backend/app/services/incidents/scout_normalization.py:_accepted_x_claim#0",
       "language": "Python",
       "file": "backend/app/services/incidents/scout_normalization.py",

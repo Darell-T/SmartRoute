@@ -3,8 +3,7 @@
 Replays keep provider payloads close to the form received from each provider:
 GTFS-RT payloads are base64-encoded protobuf bytes, 511NY is its event-array
 response, and Ticketmaster is its Discovery API response.  The adapters below
-call the production parsing/normalization functions instead of manufacturing
-their final forms.
+use provider parsers and the retained historical incident parser.
 
 This module deliberately stops before route selection.  The comparison runner
 owns baseline/intelligence decisions and consumes :class:`ReplayInputs`.
@@ -26,7 +25,6 @@ from typing import Any, NoReturn
 from unittest.mock import patch
 
 import httpx
-from app.services.incidents.ny511 import NY511Settings, SnapshotStore
 from app.services.mta import alerts as mta_alerts
 from app.services.mta import bus as mta_bus
 from app.services.mta import subway as mta_subway
@@ -35,6 +33,10 @@ from app.services.trips.route_incidents.context import extract_candidate_stop_co
 from app.services.trips.route_incidents.matching import match_cached_incidents
 
 from evaluation.route_intelligence import advisor_context
+from evaluation.route_intelligence.incident_fixtures import (
+    SnapshotSettings,
+    SnapshotStore,
+)
 
 SCENARIO_FILENAME = "scenario.json"
 FIXTURE_KEYS = frozenset(
@@ -576,7 +578,7 @@ class ReplayFixtureAdapters:
         ny511_records = self.scenario.read_json_fixture("ny511")
         if not isinstance(ny511_records, list):
             _invalid("ny511 must be a provider event array")
-        store = SnapshotStore(NY511Settings(api_key=None, enabled=False))
+        store = SnapshotStore(SnapshotSettings())
         try:
             await store.record_success(
                 ny511_records,

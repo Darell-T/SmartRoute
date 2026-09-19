@@ -189,9 +189,9 @@ function bindAbortSignals(
  * Streams FastAPI SSE without buffering while keeping credentials and raw
  * upstream failures at the server boundary.
  */
-export async function streamProxyToBackend(
+export async function streamProxyToBackend<T>(
   path: string,
-  body: unknown,
+  body: T,
   signal?: AbortSignal,
   request?: NextRequest,
 ): Promise<Response> {

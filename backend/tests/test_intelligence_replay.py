@@ -17,12 +17,12 @@ from unittest.mock import patch
 
 import anthropic
 import pytest
-from app.services.incidents.ny511 import SnapshotStore
 from app.services.mta import alerts as mta_alerts
 from app.services.mta import bus as mta_bus
 from app.services.mta import subway as mta_subway
 from app.services.trips.crowds import event_provider
 from evaluation.route_intelligence import replay
+from evaluation.route_intelligence.incident_fixtures import SnapshotStore
 from evaluation.route_intelligence.replay import (
     ReplayFixtureAdapters,
     ScenarioValidationError,

@@ -9,7 +9,7 @@
  * first, `done` always last — even after an `error`.
  */
 
-import { eventRecordSchema, parseAgentEvent } from "./event-validator";
+import { eventRecordSchema, parseAgentEvent, type AgentEventPayload } from "./event-validator";
 import type {
   ArrivalSourceStatus,
   RouteCardEvent,
@@ -225,7 +225,7 @@ const KNOWN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "done",
 ]);
 
-function warnSkip(reason: string, detail: unknown): void {
+function warnSkip<T>(reason: string, detail: T): void {
   // eslint-disable-next-line no-console
   console.warn(`[agent-chat-stream] skipping malformed SSE frame: ${reason}`, detail);
 }
@@ -234,7 +234,7 @@ function warnSkip(reason: string, detail: unknown): void {
  *  shape and returns a typed `AgentEvent`, or `null` (after a console.warn)
  *  when the frame doesn't match — a single bad frame must never crash the
  *  whole turn's stream. */
-function buildEvent(eventType: string, data: Record<string, unknown>): AgentEvent | null {
+function buildEvent(eventType: string, data: AgentEventPayload): AgentEvent | null {
   if (!KNOWN_EVENT_TYPES.has(eventType)) {
     warnSkip(`unknown event type "${eventType}"`, data);
     return null;
@@ -258,7 +258,7 @@ function readSseLine(rawLine: string): { field: "event" | "data"; value: string 
   return null;
 }
 
-function decodeSsePayload(eventType: string, raw: string): Record<string, unknown> | null {
+function decodeSsePayload(eventType: string, raw: string): AgentEventPayload | null {
   let data: unknown;
   try {
     data = raw ? JSON.parse(raw) : {};

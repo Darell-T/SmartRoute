@@ -23,8 +23,41 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run lint
+      - run: npm run lint:oxlint
       - run: npm run verify:transit-artifacts
       - run: npm run build
+
+  quality:
+    name: Quality (coverage and regression checks)
+    runs-on: ubuntu-latest
+    env:
+      QUALITY_REF: ${{ github.event.pull_request.base.sha || 'HEAD^' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Check coverage and existing quality limits
+        run: python scripts/check_quality.py --quality-ref "$QUALITY_REF" --output quality-results.json
+      - name: Preserve quality results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-results
+          path: quality-results.json
+          retention-days: 14
 
   browser:
     name: Browser (chat, map, accessibility)
@@ -76,6 +109,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run Ruff complexity limits
+        working-directory: .
+        run: python -m ruff check --config pyproject.toml --select C901,PLR0912,PLR0915 backend
       - name: Run backend tests with branch coverage
         run: python -m coverage run --branch --source=app -m pytest -q
       - name: Enforce the backend coverage floor

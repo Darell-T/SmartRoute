@@ -111,7 +111,7 @@ Current queue observations retain the provider capture time and never change
 route duration. Historical patterns refresh outside the request path and stay
 distinct from live evidence. `present_places` owns the passenger wording and a
 structured Damn Lines source event. The frontend renders that source after the
-conversation text. Maps, route cards, route steps, and itinerary facts do not
+conversation text. Maps, route cards, route steps, and trip facts do not
 receive queue data.
 
 The session keeps place identities for later turns. "The second one" refers to
@@ -145,13 +145,12 @@ converts preparation failures to tool results. The trips package owns the
 route computation for both this path and direct `POST /api/trip` requests.
 
 The trips domain calls Google Routes and gathers candidate-specific evidence.
-It applies hard constraints, combines multi-stop legs, and builds canonical
-itineraries. The agent receives candidate IDs and a limited comparison record.
+It applies hard constraints, combines multi-stop legs, and builds trip records. The agent receives candidate IDs and a limited comparison record.
 It does not receive permission to change route facts.
 
 The model selects one candidate ID. `present_route` confirms that the ID belongs
 to the active candidate set and still satisfies the required constraints. The
-presenter then emits one route card from the stored canonical itinerary.
+presenter then emits one route card from the stored server-owned trip.
 
 If the model does not return a valid selection, the backend can use the
 deterministic recovery score. That score is a fallback, not the normal model
@@ -178,8 +177,8 @@ results, transit results, route cards, errors, and the final done record.
 
 `frontend/lib/agent-chat/event-validator.ts` validates each event before it
 changes chat state. Required card identity and summary fields must be valid.
-Malformed optional itinerary, route, alert, or selection fields are omitted
-without discarding the valid card. Missing canonical facts remain unavailable.
+Malformed optional trip, route, alert, or selection fields are omitted
+without discarding the valid card. Missing trip facts remain unavailable.
 
 Chat displays cards marked `recommended` and leaves alternatives in shared
 state for the map. Cards can render after a turn settles even when it has no
@@ -222,5 +221,5 @@ generic success or claim that missing evidence proves safety.
 
 ## Related documents
 
-- [Backend architecture](backend/ARCHITECTURE.md)
-- [Release validation](docs/release-validation.md)
+- [Backend architecture](../backend/ARCHITECTURE.md)
+- [Release validation](release-validation.md)

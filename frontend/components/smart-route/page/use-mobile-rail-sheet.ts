@@ -103,7 +103,7 @@ export function useMobileRailSheet(): MobileRailSheetController {
   const mobileRailPointerSamplesRef = useRef<MobileRailPointerSample[]>([]);
 
   const getMobileRailSnapHeights = useCallback(() => {
-    if (typeof window === "undefined") {
+    if (!globalThis.window) {
       return {
         small: MOBILE_RAIL_COMPACT_HEIGHT_PX,
         medium: 380,
@@ -344,7 +344,7 @@ export function useMobileRailSheet(): MobileRailSheetController {
   );
 
   useEffect(() => {
-    if (typeof document === "undefined") return;
+    if (!globalThis.document) return;
     document.documentElement.style.setProperty(
       "--sr-mobile-sheet-px",
       `${mobileRailSheetPixels}px`,

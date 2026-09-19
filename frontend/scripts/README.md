@@ -9,7 +9,7 @@ Next.js runtime; they are not browser runtime modules.
 ## What Lives Here
 
 - Transit artifact entrypoints such as `build-subway-visual-network.ts`,
-  `build-subway-station-anchors.ts`, `regenerate-canonical-from-gtfs.ts`, and
+  `build-subway-station-anchors.ts`, the `build:network` command, and
   `build-artifact-manifest.ts`.
 - Build helper modules under `build/`.
 - Script-only TypeScript configuration in `tsconfig.json`.
@@ -20,7 +20,7 @@ Next.js runtime; they are not browser runtime modules.
   artifact and engineering debug artifacts.
 - `build-subway-station-anchors.ts`: builds station label, badge, and snap
   anchor artifacts.
-- `regenerate-canonical-from-gtfs.ts`: regenerates the canonical subway network
+- `npm run build:network`: regenerates the stored subway network
   from GTFS source data.
 - `build-artifact-manifest.ts`: writes the manifest consumed by runtime code.
 - `build/`: transit build helpers, focused visual-network stages, and build
@@ -28,7 +28,7 @@ Next.js runtime; they are not browser runtime modules.
 
 ## Inputs
 
-Inputs are mostly checked-in transit artifacts, GTFS-derived canonical data,
+Inputs are mostly checked-in transit artifacts, GTFS data,
 OpenData subway geometry, and static station point data. The build scripts read
 from `frontend/public/` and script-local source/configuration files depending
 on the entrypoint.

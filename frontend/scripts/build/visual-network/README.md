@@ -35,7 +35,7 @@ area and should preserve the orchestrator's behavior exactly.
 
 ## Inputs
 
-- GTFS-derived canonical subway data.
+- GTFS-derived shared subway data.
 - OpenData subway route geometry.
 - Checked-in station points from `frontend/public/subway-network.stations.geojson`.
 - Route color/order configuration.

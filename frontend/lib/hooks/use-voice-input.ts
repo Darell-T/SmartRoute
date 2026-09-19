@@ -48,16 +48,18 @@ type SpeechRecognitionLike = {
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
-type SpeechRecognitionWindow = Window &
-  typeof globalThis & {
-    SpeechRecognition?: SpeechRecognitionConstructor;
-    webkitSpeechRecognition?: SpeechRecognitionConstructor;
-  };
-
 function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
-  if (typeof window === "undefined") return null;
-  const speechWindow = window as SpeechRecognitionWindow;
-  return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
+  const speechWindow = globalThis.window;
+  if (!speechWindow) return null;
+  if ("SpeechRecognition" in speechWindow && speechWindow.SpeechRecognition instanceof Function) {
+    // SAFETY: a Function on window.SpeechRecognition is the browser speech constructor.
+    return speechWindow.SpeechRecognition as SpeechRecognitionConstructor;
+  }
+  if ("webkitSpeechRecognition" in speechWindow && speechWindow.webkitSpeechRecognition instanceof Function) {
+    // SAFETY: a Function on window.webkitSpeechRecognition is the prefixed speech constructor.
+    return speechWindow.webkitSpeechRecognition as SpeechRecognitionConstructor;
+  }
+  return null;
 }
 
 // Capability detection never changes after mount, so this is modeled as a

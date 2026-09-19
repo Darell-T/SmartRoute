@@ -29,7 +29,7 @@ const MAX_SOURCE_TITLE = 100;
 const MAX_SOURCE_URL = 2_048;
 
 export const eventRecordSchema = z.record(z.unknown());
-type AgentEventPayload = z.input<typeof eventRecordSchema>;
+export type AgentEventPayload = z.input<typeof eventRecordSchema>;
 
 function normalizedSourceUrl(value: string): string | null {
   let url: URL;
@@ -259,9 +259,9 @@ const routeCardEventSchema = z
     destination: endpointSchema,
     summary: routeSummarySchema,
     route: z.array(routeStepSchema.extend({
-      polyline: routeStepSchema.shape.polyline.catch(undefined),
-      intermediate_stops: routeStepSchema.shape.intermediate_stops.catch(undefined),
-      intermediate_stop_locations: routeStepSchema.shape.intermediate_stop_locations.catch(undefined),
+      polyline: routeStepSchema["shape"].polyline.catch(undefined),
+      intermediate_stops: routeStepSchema["shape"].intermediate_stops.catch(undefined),
+      intermediate_stop_locations: routeStepSchema["shape"].intermediate_stop_locations.catch(undefined),
     }).nullable().catch(null)).max(MAX_LIST)
       .transform((steps) => steps.filter((step) => step !== null)),
     alerts: z.array(alertSchema.nullable().catch(null)).max(MAX_LIST)

@@ -73,7 +73,7 @@ export function installMobileViewportVariables(
 
 export function useMobileVisibleViewport(): void {
   useEffect(() => {
-    if (typeof window === "undefined" || typeof document === "undefined") {
+    if (!globalThis.window || !globalThis.document) {
       return;
     }
     return installMobileViewportVariables(window, document.documentElement);

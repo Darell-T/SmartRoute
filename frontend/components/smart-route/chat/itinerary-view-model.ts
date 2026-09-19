@@ -8,7 +8,6 @@
 
 import type {
   CanonicalItinerary,
-  RecommendationReason,
   RouteCard,
 } from "@/lib/agent-chat/stream";
 import { formatNycRouteClock } from "@/lib/nyc-route-clock";
@@ -85,21 +84,18 @@ export function parseRationale(reason: string | undefined | null): string[] {
     .filter(Boolean);
 }
 
-function structuredFastestCopy(
-  reason: Extract<RecommendationReason, { code: "fastest" }>,
-): string {
-  const seconds =
-    reason.difference_seconds != null && Number.isFinite(reason.difference_seconds)
-      ? Math.max(0, reason.difference_seconds)
-      : 0;
+function structuredFastestCopy<T>(reason: T): string {
+  const raw = reason instanceof Object && "difference_seconds" in reason ? Number(reason.difference_seconds) : 0;
+  const seconds = Number.isFinite(raw) ? Math.max(0, raw) : 0;
   if (seconds >= 60) return `About ${Math.round(seconds / 60)} min faster than the next option`;
   return "Fastest available route";
 }
 
-function structuredFewerTransfersCopy(
-  reason: Extract<RecommendationReason, { code: "fewer_transfers" }>,
-): string | null {
-  const difference = Math.max(0, reason.transfer_difference);
+function structuredFewerTransfersCopy<T>(reason: T): string | null {
+  const difference =
+    reason instanceof Object && "transfer_difference" in reason
+      ? Math.max(0, Number(reason.transfer_difference) || 0)
+      : 0;
   if (!difference) return null;
   return `Uses ${difference} fewer ${difference === 1 ? "transfer" : "transfers"}`;
 }
@@ -114,15 +110,17 @@ const STRUCTURED_REASON_COPY = new Map<string, string>(
   }),
 );
 
-export function formatStructuredRecommendationReason(
-  reason: RecommendationReason | string | unknown,
-): string | null {
-  if (typeof reason === "string") return reason.trim() || null;
-  if (!reason || typeof reason !== "object" || !("code" in reason)) return null;
-  const structured = reason as RecommendationReason;
-  if (structured.code === "fastest") return structuredFastestCopy(structured);
-  if (structured.code === "fewer_transfers") return structuredFewerTransfersCopy(structured);
-  return STRUCTURED_REASON_COPY.get(structured.code) ?? null;
+export function formatStructuredRecommendationReason<T>(reason: T): string | null {
+  if (isPlainString(reason)) return reason.trim() || null;
+  if (!(reason instanceof Object) || !("code" in reason)) return null;
+  if (reason.code === "fastest") return structuredFastestCopy(reason);
+  if (reason.code === "fewer_transfers") return structuredFewerTransfersCopy(reason);
+  if (!isPlainString(reason.code)) return null;
+  return STRUCTURED_REASON_COPY.get(reason.code) ?? null;
+}
+
+function isPlainString<T>(value: T): value is T & string {
+  return String(value) === value;
 }
 
 function isValidCard(

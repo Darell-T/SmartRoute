@@ -1,195 +1,64 @@
 # SmartRoute
 
-Real-time NYC transit planning that combines live service conditions, route
-facts, and conversational guidance without letting the model invent the trip.
+[Open SmartRoute](https://smartroute.fyi) to plan a trip, check arrivals, or view
+current NYC transit conditions.
 
-![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)
-![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=111827)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6?logo=typescript&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.12-3776ab?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
-![MapLibre](https://img.shields.io/badge/MapLibre_GL-396cb2?logo=maplibre&logoColor=white)
+SmartRoute compares subway, bus, and walking options using scheduled service,
+live MTA feeds, alerts, and nearby incidents. The Agent understands the request
+and chooses among route options. The backend owns travel times, stops, transfers,
+and the rules that decide whether a route can run.
 
 ![Home in light mode](docs/assets/home_nearby.png)
 
-## What SmartRoute does
+## How it works
 
-SmartRoute helps a rider decide how to move through New York City right now.
-It can find a destination, compare transit routes, explain current conditions,
-show nearby arrivals, and carry the same accepted trip into the map and route
-steps.
+1. The Agent interprets the rider's destination, preferences, and follow-up questions.
+2. Backend services prepare route options and attach current service evidence.
+3. The Agent chooses an option. The backend checks the choice and presents the
+   stored trip in chat, directions, and the map.
 
-The recommendation is not a free-form model answer. The backend builds real
-route options from live and scheduled data. The assistant figures out what
-the rider wants and picks among those options. Chat, the route card, route
-steps, and the map all show the same trip.
+If the Agent cannot make a valid choice, the backend selects a route using its
+fallback ranking. Missing live evidence stays unknown.
 
-> The Agent understands the rider. The backend owns truth and execution.
+The main engineering decisions are:
 
-## Project highlights
+- Eight bounded capabilities keep provider calls and trip changes behind
+  validated backend operations.
+- Route comparison accounts for walking, transfers, accessibility, service
+  changes, incidents, and event or crowd exposure.
+- Redis stores chat sessions, admission state, and the shared incident index.
+  A background job refreshes city incidents every 30 minutes, outside route requests.
+- GTFS and MapLibre geometry are prepared before requests. Generated station
+  anchors keep stops attached to the intended lines.
+- REST, streamed chat events, and WebSocket updates carry the same backend trip
+  facts to the frontend.
 
-- An Agent-led conversational flow that understands compound requests,
-  follow-ups, saved references, and explicit route constraints.
-- One shared trip shown in chat, the route card, route steps, and the map.
-- Live subway and bus context from GTFS realtime, MTA alerts, and BusTime.
-- Stalled-train evidence from stale GTFS realtime vehicle timestamps and
-  stalled-bus evidence from BusTime `noProgress` status outside layovers.
-- Route comparison using duration, walking, transfers, incidents, event
-  exposure, crowd context, accessibility, and rider choices.
-- Nearby arrivals, issue-first alerts, vehicle positions, and WebSocket updates.
-- A generated MapLibre subway network with deterministic station anchors and
-  official route colors.
-- Background incident scouting, so broad incident research is not part of the
-  rider request path.
+Read the [Agent pipeline](docs/agent-pipeline.md) for the chat flow or the
+[backend architecture](backend/ARCHITECTURE.md) for service ownership.
+The [documentation map](docs/README.md) links to contracts and release checks.
 
-## Project snapshots
+## Screenshots
 
 | Chat | Transit map |
 |---|---|
 | ![Chat in light mode](docs/assets/chat.png) | ![Transit map in light mode](docs/assets/transit_map.png) |
 
+<details>
+<summary>Service alerts</summary>
+
 ![Service alerts in light mode](docs/assets/service_alerts.png)
 
-## How it works
+</details>
 
-```text
-Rider request and session context
-              |
-              v
-       Agent understands goals
-              |
-              v
-  Validated backend capabilities
-              |
-              v
-Providers, GTFS, realtime feeds, indexed incidents
-              |
-              v
- Route options and live evidence
-              |
-              v
-  Agent chooses a valid option
-              |
-              v
-Server presenter renders verified facts
-              |
-              v
- Chat card, route steps, and map
-```
+## Stack
 
-The Agent uses eight model-visible capabilities:
-`declare_goals`, `discover_places`, `check_transit`,
-`prepare_route_options`, `present_places`, `present_transit`, `present_route`,
-and `complete_turn`. Internal provider helpers are not model-visible.
-
-`POST /api/trip` builds a plan without the assistant. `POST /api/agent/chat`
-lets the assistant interpret the request and choose a route, while still
-using the same backend trip facts.
-
-Use the [documentation map](docs/README.md) to find the backend architecture,
-agent pipeline, production contracts, and release checks.
-
-## Route intelligence
-
-SmartRoute does more than choose the shortest route a provider returns. The
-backend builds and checks real route options, then the Agent compares them
-against what the rider asked for and what is happening on the network right now.
-
-A route can be evaluated using:
-
-- total travel time, walking, and transfers
-- how close a destination is to the rider
-- preferences like avoiding a line or minimizing walking
-- current MTA service changes and realtime conditions
-- stalled-train and stalled-bus signals
-- incidents affecting the trip
-- event and crowd exposure
-- accessibility needs
-- how complete and recent the available data is
-
-The Agent sees those facts directly instead of being handed a hidden score or
-pre-ranked winner. That lets it reason about tradeoffs instead of blindly picking
-the numerically shortest route.
-
-For example, a destination might save a few minutes of walking but require going
-far across the city. SmartRoute can recognize that the overall trip is worse and
-prefer a closer option that still matches the rider's priorities.
-
-The backend still enforces the hard rules. An impossible route or a required
-segment that is not running stays blocked. Rider preferences can be changed
-during the conversation, while routes with delays, local service, crowd exposure,
-or other issues can still be used when they are actually viable.
-
-Each route is checked against the same set of live conditions before the Agent
-makes a choice, so the recommendation, route card, directions, and map all stay
-in sync.
-
-If the Agent cannot make a valid choice, SmartRoute falls back to deterministic
-ranking instead of inventing a route.
-
-## Architecture
-
-| Layer | Responsibility |
-|---|---|
-| Next.js frontend | Chat streaming, route cards, left rail, map, and API proxies |
-| FastAPI routers | Admission, authentication, REST, SSE, and WebSocket boundaries |
-| Conversational Agent | Goals, capability loop, Agent state, evidence obligations, and the shared trip shown in the UI |
-| Trip services | Route preparation, constraints, candidate facts, evidence association, fallback selection, and the planned trip |
-| Transit and provider services | MTA, GTFS, GTFS realtime, BusTime, and provider normalization |
-| Live-feed services | Arrivals, alerts, vehicles, and nearby transit context |
-| Background refresh | Bounded city incident collection into the shared Redis index |
-
-Static GTFS and map artifacts are prepared before the request path. Broad city
-incident research runs every 30 minutes through the Render cron service. Normal
-route requests read the shared incident index and never wait for a broad xAI or
-Web scan.
-
-## Technology
-
-Frontend:
-
-- Next.js 16, React 19, TypeScript 5.7, Tailwind CSS 4
-- MapLibre GL, Motion, Radix, Zod, Lucide, Iconoir, and Font Awesome
-
-Backend:
-
-- Python 3.12, FastAPI, Pydantic, and Uvicorn
-- Redis-compatible session, admission, and incident storage
-- Google Routes, Anthropic, xAI, Ticketmaster, MTA GTFS/GTFS-RT, and BusTime
-
-Deployment:
-
-- Vercel for the frontend
-- Render-compatible FastAPI web service
-- Render cron for background incident refresh
-
-## Reliability guarantees
-
-The repository protects these product invariants:
-
-- One shared trip owns duration, transfers, walking, stops, and timing.
-- Missing evidence stays unknown and never becomes a false all-clear.
-- Raw model prose cannot finish unresolved grounded work.
-- Accepted unchanged advisories cannot create a repeated consent loop.
-- Passenger output never includes tool names, schema fields, raw IDs, prompts,
-  provider payloads, or chain-of-thought.
-- Production chat requires durable Redis-backed session and admission state.
-
-## Release gates
-
-```bash
-cd backend
-python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest -q
-
-cd ../frontend
-npm install
-npm run typecheck
-npm run test:unit
-npm run lint
-npm run verify:transit-artifacts
-npm run build
-```
+- Frontend: Next.js 16, React 19, TypeScript 5.7, Tailwind CSS 4, MapLibre GL,
+  Motion, Radix, and Zod.
+- Backend: Python 3.12, FastAPI, Pydantic, and Redis-compatible storage.
+- Data and services: MTA GTFS and realtime feeds, BusTime, Google Routes,
+  Anthropic, xAI, and Ticketmaster.
+- Deployment: Vercel frontend, Render-compatible FastAPI service, and a Render
+  cron job for incident refresh.
 
 ## Run locally
 
@@ -231,32 +100,25 @@ For local chat UI work without paid model or route calls, set
 `AGENT_MOCK_MODE=1` under an explicit local or test runtime profile. Production
 startup rejects mock and fixture modes.
 
-## Repository map
+## Verification
 
-```text
-backend/
-  app/routers/                 FastAPI and WebSocket entry points
-  app/services/agent/          Conversational runtime, state, model boundary, evidence, and completion
-  app/services/agent/tools/    Model-visible capability adapters and Agent-specific execution
-  app/services/trips/          Route preparation, constraints, scoring, and the planned trip
-  app/services/mta/            MTA / GTFS / BusTime provider normalization and realtime data
-  app/services/live_feed/      Current arrivals, vehicles, and service snapshots
-  app/services/incidents/      Incident collection, normalization, indexing, and refresh
-  evaluation/                  Deterministic offline evaluation and replay infrastructure
-  scripts/                     Reproducible build, release, and maintenance commands
-  tests/                       Backend contracts and conversation matrices
+Install the development dependencies, then run the same quality check used in
+CI. Use the commit before your changes as the comparison point.
 
-frontend/
-  app/                         Next.js shell and server API proxies
-  components/smart-route/      Chat, route cards, and left-rail UI
-  components/map/              MapLibre transit and station rendering
-  lib/                         Typed clients, state, and WebSocket helpers
-  scripts/build/               Transit artifact generation and checks
-  public/                      Generated runtime map artifacts
+```bash
+python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+npm --prefix frontend ci
+python scripts/check_quality.py --quality-ref <base-commit>
 ```
 
-Do not hand-edit generated subway GeoJSON. Regenerate it through
-`npm run build:transit-artifacts` and inspect the resulting diff.
+That command runs frontend coverage, backend tests with branch coverage, and
+complexity regression checks. Existing baseline entries may not worsen.
+CI also runs typechecking, ESLint, Oxlint, transit artifact checks, a production
+build, browser release tests, and dependency scans. See
+[release validation](docs/release-validation.md) for the individual commands.
+
+Do not hand-edit generated subway GeoJSON. Use `npm run build:transit-artifacts`
+from `frontend/` and inspect the result.
 
 ## Interface credits
 

@@ -40,6 +40,7 @@ import {
 import {
   toLngLat,
   artifactUrl,
+  parseFeatureCollection,
   mapFeatureArrayProperty,
   firstSymbolLayerId,
   DEBUG_LIVE_MAP,
@@ -159,7 +160,7 @@ export function SmartRouteMap({
     // process.env.NODE_ENV !== "production" AND URL param `qa-map=1`. Never set
     // in production; ignored by normal app behavior; reads only the URL once at
     // map construction time, so subsequent navigation cannot toggle it on.
-    if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+    if (globalThis.window && process.env.NODE_ENV !== "production") {
       try {
         const qaParams = new URLSearchParams(window.location.search);
         if (qaParams.get("qa-map") === "1") {
@@ -358,13 +359,13 @@ export function SmartRouteMap({
   useEffect(() => {
     let cancelled = false;
     const stationsPromise = fetch(artifactUrl("subway-network.stations.geojson"))
-      .then((res) => {
+      .then(async (res) => {
         if (!res.ok) {
           throw new Error(
             `Failed to load stations: ${res.status} ${res.statusText}`,
           );
         }
-        return res.json() as Promise<GeoJSON.FeatureCollection>;
+        return parseFeatureCollection(await res.json());
       })
       .catch((error) => {
         if (DEBUG_LIVE_MAP) {

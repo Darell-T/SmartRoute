@@ -9,8 +9,8 @@ when they help the reader complete it.
 | Look up backend owners, entry points, and paths | [`backend/ARCHITECTURE.md`](../backend/ARCHITECTURE.md) | Reference |
 | Look up frontend lib module owners and paths | [`frontend/lib/README.md`](../frontend/lib/README.md) | Reference |
 | Look up left-rail module owners and paths | [`frontend/components/smart-route/left-rail/README.md`](../frontend/components/smart-route/left-rail/README.md) | Reference |
-| Understand how a chat turn stays grounded | [`SMARTROUTE_AGENT_PIPELINE.md`](../SMARTROUTE_AGENT_PIPELINE.md) | Explanation |
-| Look up domain language | [`CONTEXT.md`](../CONTEXT.md) | Reference |
+| Understand how a chat turn stays grounded | [`agent-pipeline.md`](agent-pipeline.md) | Explanation |
+| Look up domain language | [`reference/domain-language.md`](reference/domain-language.md) | Reference |
 | Read why queue evidence is not a ninth tool | [`adr/0004-damn-lines-place-queue-evidence.md`](adr/0004-damn-lines-place-queue-evidence.md) | Explanation |
 | Look up admission and WebSocket rules | [`admission-and-websocket-contract.md`](admission-and-websocket-contract.md) | Reference |
 | Look up production process and cron ownership | [`production-topology-contract.md`](production-topology-contract.md) | Reference |

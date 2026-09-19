@@ -18,7 +18,7 @@ export type ResponsePresentationModeStore = {
 };
 
 export function normalizeResponsePresentationMode(
-  value: unknown,
+  value: string | null,
 ): ResponsePresentationMode {
   return value === "quick" ? "quick" : DEFAULT_RESPONSE_PRESENTATION_MODE;
 }
@@ -49,7 +49,7 @@ export function persistResponsePresentationMode(
 }
 
 export function browserSessionStorage(): Storage | undefined {
-  if (typeof window === "undefined") return undefined;
+  if (!globalThis.window) return undefined;
   try {
     return window.sessionStorage;
   } catch {
