@@ -493,6 +493,7 @@ function installPageDom() {
   documentNode.defaultView = windowStub;
   globalThis.window = windowStub;
   globalThis.document = documentNode;
+  globalThis.matchMedia = windowStub.matchMedia;
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver = windowStub.ResizeObserver;
   globalThis.getComputedStyle = windowStub.getComputedStyle;
@@ -546,9 +547,14 @@ async function flushPage() {
 }
 
 async function waitForLabel(root, label, message) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  // Route cards wait until progressive text catches up on 18ms timers. A burst
+  // of zero-delay flushes can finish on Linux before those timers fire.
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
     if (queryAll(root, `[aria-label="${label}"]`)[0]) return;
-    await flushPage();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
   }
   throw new Error(message);
 }
