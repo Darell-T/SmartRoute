@@ -108,15 +108,10 @@ def _search_request_body(
     radius_m: float,
     max_results: int,
     page_token: object,
-    *,
-    restrict_to_area: object,
 ) -> dict:
-    location_mode = (
-        "locationRestriction" if restrict_to_area else "locationBias"
-    )
     request_body = {
         "textQuery": query,
-        location_mode: {
+        "locationBias": {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
                 "radius": radius_m,
@@ -211,7 +206,6 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             radius_m,
             max_results,
             tool_input.get("page_token"),
-            restrict_to_area=tool_input.get("restrict_to_area"),
         ),
         headers={
             "Content-Type": "application/json",

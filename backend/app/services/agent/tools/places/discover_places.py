@@ -313,7 +313,6 @@ async def _search(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
             "query": request.query,
             "near": target["near"],
             "max_results": per_target,
-            "restrict_to_area": scope["kind"] == "named_area",
         }
         token = prior_tokens.get(f"target_{index}")
         if token:
@@ -356,7 +355,6 @@ async def _verify(request: DiscoveryRequest, ctx: ToolContext) -> ToolResult:
                     "query": name,
                     "near": target["near"],
                     "max_results": 3,
-                    "restrict_to_area": scope["kind"] == "named_area",
                 },
                 ctx,
             )

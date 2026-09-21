@@ -93,7 +93,7 @@ class GooglePlacesRequestTests(unittest.IsolatedAsyncioTestCase):
         assert "nextPageToken" in request["headers"]["X-Goog-FieldMask"]
         assert result.data["next_page_token"] == next_cursor
 
-    async def test_named_area_uses_location_restriction(self):
+    async def test_named_area_uses_location_bias(self):
         fetch = AsyncMock(return_value=({"places": []}, None))
         with (
             patch.dict(os.environ, {"GOOGLE_PLACES_API_KEY": "test-key"}),
@@ -116,8 +116,8 @@ class GooglePlacesRequestTests(unittest.IsolatedAsyncioTestCase):
 
         assert result.ok
         request_body = fetch.await_args.kwargs["json_body"]
-        assert "locationRestriction" in request_body
-        assert "locationBias" not in request_body
+        assert "locationBias" in request_body
+        assert "locationRestriction" not in request_body
 
 
 class QueueContextTests(unittest.IsolatedAsyncioTestCase):
