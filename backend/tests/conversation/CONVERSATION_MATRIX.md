@@ -1,6 +1,6 @@
 # SmartRoute deterministic conversation matrix
 
-This matrix documents the current model-led conversation contract. The tests
+This matrix documents the current Agent conversation contract. The tests
 run the production loop, state-scoped public capability surface, real
 registries, stores, evidence transitions, shared presenters, and SSE event
 path. Anthropic decisions and external provider boundaries are scripted unless
@@ -17,7 +17,7 @@ The initial model request offers only:
 - `prepare_route_options`
 - `complete_turn`
 
-After the model declares a `TurnContract`, `TurnEvidence` exposes only the
+After the Agent declares a `TurnContract`, `TurnEvidence` exposes only the
 capabilities valid for current goal state. `present_places`, `present_transit`,
 and `present_route` appear only when owned shared evidence is ready.
 Registered internal leaf tools remain unreachable from the model.

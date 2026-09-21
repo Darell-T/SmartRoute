@@ -210,7 +210,7 @@ this header, so arbitrary headers cannot satisfy the chat prerequisite. The
 validator supplies its own fixed, non-secret `X-SmartRoute-Principal` admission
 identity; do not provide or log a principal value in the command.
 
-The model chat smoke is off by default. `--model-chat-smoke` is one explicit,
+The live Agent chat check is off by default. `--model-chat-smoke` is one explicit,
 costed model-backed request and requires both a positive maximum cost budget
 and a positive declared cost. It requires HTTP success **and** a bounded SSE
 stream terminating in the backend’s successful `done` event (`end_turn` or

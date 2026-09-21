@@ -96,7 +96,7 @@ Put frontend configuration in `frontend/.env.local`:
 Open `http://localhost:3000`. The frontend uses `http://localhost:8000` by
 default when no hosted backend URL is configured.
 
-For local chat UI work without paid model or route calls, set
+For local chat UI work without paid Agent or route-provider calls, set
 `AGENT_MOCK_MODE=1` under an explicit local or test runtime profile. Production
 startup rejects mock and fixture modes.
 

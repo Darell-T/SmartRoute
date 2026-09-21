@@ -13,6 +13,38 @@ covers the request path, goals, and completion rules.
 [Release validation](../docs/release-validation.md) lists the deterministic
 checks for a change.
 
+## System flow map
+
+Chat and direct trip requests share route preparation. Chat uses the Agent to
+choose among prepared candidates. The direct trip endpoint selects the first
+eligible candidate in deterministic score order without a model call.
+
+```mermaid
+flowchart TB
+    request["Rider request"] --> api["API entry points"]
+    api --> agent["Chat Agent"]
+    api --> direct["Direct trip planner"]
+    api --> live["Live-feed service"]
+    agent --> places["Place and transit services"]
+    agent --> trips["Shared trip preparation"]
+    direct --> trips
+    evidence["Providers and shared evidence"] -.-> places
+    evidence -.-> trips
+    evidence -.-> live
+    places --> results["Validated passenger results"]
+    trips --> results
+    results --> views["Chat, cards, route steps and map"]
+    live --> views
+```
+
+Solid arrows show request and result flow. Dotted arrows show data supplied
+by provider adapters, cached transit state, and the incident index. The map
+groups these sources for readability. They do not share one refresh cycle.
+
+Chat results return as SSE. Direct trips return as JSON. Live-feed responses
+use HTTP or WebSocket transport. Browser requests pass through the Next.js
+proxies where required by the transport contract.
+
 ## Data owners
 
 | Fact or action | Owner |
@@ -21,7 +53,7 @@ checks for a change.
 | Route candidates and server-owned trip facts | `app/services/trips/` |
 | Incident collection and storage | `app/services/incidents/` |
 | Process-wide realtime transit state | `app/services/live_feed/` |
-| Chat session state and model tool execution | `app/services/agent/` |
+| Chat session state and Agent tool execution | `app/services/agent/` |
 | HTTP status codes, authentication, and streaming transport | `app/routers/` |
 | Route cards, route steps, and map display | The frontend, from backend facts |
 
@@ -49,7 +81,7 @@ route arithmetic. `prepare_route_options` crosses into
 `app/services/trips/preparation/`. `present_route` accepts a candidate ID that
 the server already stored.
 
-`TurnContract` and `TurnEvidence` live outside the model response. A fluent
+`TurnContract` and `TurnEvidence` live outside the Agent response. A fluent
 sentence cannot finish unresolved grounded work. Presenters render stored
 facts. General conversation can finish through `complete_turn`. Grounded work
 must use its presenter.
@@ -139,7 +171,7 @@ collection, or realtime refresh.
 |---|---|
 | `model/policy.py` | Shared model configuration and Auto/Quick budgets |
 | `model/prompt.py` | System prompt and context blocks |
-| `model/request.py` | Anthropic request construction |
+| `model/request.py` | Anthropic requests and optional provider-hosted web search |
 | `model/stream.py` | Model stream parsing and retries |
 | `model/output_projection.py` | Safe model output projection |
 | `model/budget.py` | Request and spend limits |
@@ -151,6 +183,7 @@ collection, or realtime refresh.
 | `turn/finalization.py` | Final events, timings, and telemetry |
 | `public_surface.py` | Tools offered for the current server state |
 | `session.py` | Chat session state, leases, and pending continuations |
+| `transcript_store.py` | Visible conversation events and accepted route replay |
 | `candidate_store.py` | Route candidate sets |
 | `discovery_store.py` | Place discovery sets |
 | `trip_state.py` | Accepted trip and rider constraints |
@@ -164,7 +197,7 @@ Queue evidence never enters server-owned trip arithmetic, cards, steps, or
 maps. The backend emits server-written queue text and trusted source events only
 in the conversation stream.
 
-The model can see eight tools:
+The application defines eight public tools:
 
 - `declare_goals`
 - `discover_places`
@@ -174,6 +207,11 @@ The model can see eight tools:
 - `present_transit`
 - `present_route`
 - `complete_turn`
+
+`public_surface.py` offers a subset for the current goals and stored evidence.
+`model/request.py` can also offer Anthropic's hosted `web_search` after a
+structured place search, subject to `TurnEvidence.may_offer_web()`. Hosted
+search is separate from the application registry.
 
 `app/services/agent/tools/__init__.py` owns the tool registry.
 `tools/places/`, `tools/route/`, and `tools/transit/` contain Agent-specific
@@ -191,7 +229,7 @@ by chat, the trip endpoint, route cards, route steps, and the map.
 | `preparation/` | Endpoint resolution, provider calls, constraints, evidence, multi-stop combination, and finalization |
 | `route_incidents/` | Candidate-specific incident lookup and matching |
 | `crowds/` | Event and crowd evidence for a trip |
-| `scoring.py` | Deterministic recovery score |
+| `scoring.py` | Deterministic scores used by direct planning and chat recovery |
 | `selection_decision.py` | Candidate eligibility and fallback selection |
 | Trip response assembly | Builds the server-owned trip from prepared legs |
 | `enrichment.py` | Stop and route enrichment |
@@ -209,6 +247,13 @@ callbacks, then converts `RoutePreparationFailure` into a tool failure.
 `preparation/dependencies.py` constructs the provider dependencies for both
 chat and direct trip requests. Neither adapter replaces server-owned trip
 calculations.
+
+Route presentation checks candidate ownership, expiry, constraints, and
+selection framing before committing the result. An accepted route can be
+shown again from the stored transcript. A what-if route stays in temporary
+session state until committed, so previewing it does not replace the accepted
+trip. These transitions belong to `agent/tools/route/present_route.py` and
+`present_route_commit.py`.
 
 The Agent route adapter keeps single-leg aggregate conversion in
 `tools/route/prepare_route_options.py`. Candidate evidence lookup and nonfatal

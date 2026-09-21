@@ -50,7 +50,7 @@ _Avoid_: Total trip wait, added ETA
 
 **Trusted source**:
 A server-owned title and URL naming the queue provider page used for that evidence.
-_Avoid_: Model-authored citation, camera feed
+_Avoid_: Agent-authored citation, camera feed
 
 **Subway line**:
 An MTA route identity such as the A or the 6.
