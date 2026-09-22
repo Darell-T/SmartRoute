@@ -91,6 +91,14 @@ class ActivityCopyTests(unittest.TestCase):
 
     def test_ordinary_terminal_message_rejects_unowned_continuation(self) -> None:
         assert validated_terminal_message("I can check that when you are ready.", outcome="answer") is None
+        assert validated_terminal_message(
+            "The wait is about 11 minutes. Want a route? Or should I check another place?",
+            outcome="answer",
+        ) is None
+
+    def test_ordinary_terminal_message_allows_one_next_step_question(self) -> None:
+        message = "The wait is about 11 minutes. Want me to route you there?"
+        assert validated_terminal_message(message, outcome="answer") == message
 
 
 if __name__ == "__main__":

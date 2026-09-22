@@ -184,13 +184,12 @@ def _has_unowned_continuation(message: str) -> bool:
     """Detect syntax that leaves an ordinary answer promising more work.
 
     This is deliberately an output-contract check, not rider-intent parsing.
-    Questions belong to ``clarification`` and future first-person commitments
-    require an executable, backend-owned continuation. Ordinary answers have
-    neither permission, so they must stand on their own.
+    Questions belong to one next step in an answer, or to ``clarification``.
+    More than one question, and future first-person commitments, are rejected.
     """
 
     normalized = " " + message.casefold().replace("\u2019", "'") + " "
-    if "?" in normalized:
+    if normalized.count("?") > 1:
         return True
     if any(
         future_subject in normalized

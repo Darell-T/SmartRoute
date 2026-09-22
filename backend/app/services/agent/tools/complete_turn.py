@@ -48,12 +48,14 @@ COMPLETE_TURN_SCHEMA = {
             "message": {
                 "type": "string",
                 "description": (
-                    "Rider-facing prose with no tool names or internal IDs. An "
-                    "ordinary answer must be self-contained: do not append a question, "
-                    "offer optional work, promise future monitoring, or imply another "
-                    "action. Use clarification only when rider input is required. A "
-                    "truthful unavailable outcome may offer a retry after the relevant "
-                    "capability was actually attempted."
+                    "Rider-facing prose with no tool names or internal IDs. "
+                    "State the facts, then end with one question that offers a "
+                    "SmartRoute next step, such as directions. Do not add a "
+                    "second question, promise monitoring, or imply work that "
+                    "will not happen. Use clarification only when rider input "
+                    "is required before any answer. A truthful unavailable "
+                    "outcome may offer a retry after the relevant capability "
+                    "was actually attempted."
                 ),
             },
         },
@@ -375,8 +377,7 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
             ok=False,
             error=(
                 "message is missing, contains unsafe internal language, or adds "
-                "an unowned optional/future action; ordinary answers must end "
-                "without a question or promise"
+                "more than one question or a promise of later work"
             ),
             internal_diagnostic=True,
         )
