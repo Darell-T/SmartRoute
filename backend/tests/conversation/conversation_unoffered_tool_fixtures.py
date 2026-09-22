@@ -46,7 +46,9 @@ ROUTE_READY_PROFILE = frozenset({"present_route", "complete_turn"})
 DISCOVERY_READY_PROFILE = frozenset(
     {"present_places", "complete_turn", "web_search"}
 )
-GENERAL_RESPONSE_STATE_VALID_PROFILE = frozenset({"complete_turn"})
+GENERAL_RESPONSE_STATE_VALID_PROFILE = frozenset(
+    {"complete_turn", "check_place_line"}
+)
 
 TRANSIT_FACT_GOALS_INPUT = {
     "goals": [

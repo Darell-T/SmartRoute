@@ -48,7 +48,7 @@ class AgentModelRequestTests(unittest.TestCase):
             tools=TOOLS,
         )
 
-        assert len(kwargs["tools"]) == 8
+        assert len(kwargs["tools"]) == 9
         assert all("strict" not in tool for tool in kwargs["tools"])
         assert kwargs["tool_choice"] == {"type": "any"}
 
