@@ -128,7 +128,7 @@ backend/scripts/run_agent_replay_validation.py
 backend/tests/test_agent_evals.py
 
 # Track current documentation. Other generated material under docs stays local
-# except for intentional PNG assets. Historical working records stay local.
+# except for intentional PNG assets and the README demo. Historical working records stay local.
 docs/*
 !docs/*.md
 !docs/adr/
@@ -139,6 +139,7 @@ docs/SMARTROUTE_INTERVIEW_HANDBOOK.md
 !docs/assets/
 docs/assets/*
 !docs/assets/*.png
+!docs/assets/*.mp4
 
 # Platform-local Playwright visual snapshots are not CI evidence.
 frontend/tests/release/*.spec.ts-snapshots/
