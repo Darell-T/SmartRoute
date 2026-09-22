@@ -89,7 +89,8 @@ class SystemPromptGuardTests(unittest.TestCase):
         assert "not a report or a feature catalogue" in normalized
         assert "simple greetings to one natural sentence" in normalized
         assert "do not list capabilities unless the rider asks" in normalized
-        assert "concise contextual framing" in normalized
+        assert "one useful next step" in normalized
+        assert "ask whether they want to be routed there" in normalized
 
     def test_prompt_is_non_empty_and_reasonably_sized(self):
         # Loose sanity bound -- guards against an accidental near-empty prompt
