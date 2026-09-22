@@ -97,8 +97,8 @@ class Sonnet5RequestTests(unittest.IsolatedAsyncioTestCase):
         # Presenter tools are state-valid only after provider evidence exists;
         # the initial request exposes the declaration, capabilities, and
         # terminal tool.
-        assert len(kwargs["tools"]) == 5
-        assert {tool.get("name") for tool in kwargs["tools"] if tool.get("type") != "web_search_20250305"} == {"declare_goals", "discover_places", "check_transit", "prepare_route_options", "complete_turn"}
+        assert len(kwargs["tools"]) == 6
+        assert {tool.get("name") for tool in kwargs["tools"] if tool.get("type") != "web_search_20250305"} == {"declare_goals", "discover_places", "check_transit", "check_place_line", "prepare_route_options", "complete_turn"}
         assert mode.explanation_style == "comparative"
         diagnostics = model_request.request_diagnostics(kwargs)
         assert "model=claude-sonnet-5" in diagnostics

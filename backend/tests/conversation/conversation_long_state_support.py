@@ -137,6 +137,7 @@ _INITIAL_MODEL_TOOL_PROFILE = frozenset(
         "declare_goals",
         "discover_places",
         "check_transit",
+        "check_place_line",
         "prepare_route_options",
         "complete_turn",
     }

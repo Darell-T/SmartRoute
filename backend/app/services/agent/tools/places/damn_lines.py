@@ -92,6 +92,10 @@ def get_supported_venue(google_place_id: str) -> SupportedVenue | None:
     return _SUPPORTED_VENUES.get(str(google_place_id or "").strip())
 
 
+def supported_venues() -> tuple[SupportedVenue, ...]:
+    return tuple(_SUPPORTED_VENUES.values())
+
+
 def source_for_places(google_place_ids: list[str]) -> tuple[QueueSource, ...]:
     venues = (get_supported_venue(place_id) for place_id in dict.fromkeys(google_place_ids))
     return tuple(QueueSource(f"Damn Lines: {venue.name}", venue.source_url) for venue in venues if venue)

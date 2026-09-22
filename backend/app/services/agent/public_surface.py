@@ -13,6 +13,7 @@ PUBLIC_TOOL_NAMES: tuple[str, ...] = (
     "declare_goals",
     "discover_places",
     "check_transit",
+    "check_place_line",
     "prepare_route_options",
     "present_places",
     "present_transit",
@@ -25,6 +26,7 @@ INITIAL_TOOL_NAMES: frozenset[str] = frozenset(
         "declare_goals",
         "discover_places",
         "check_transit",
+        "check_place_line",
         "prepare_route_options",
         "complete_turn",
     }
@@ -387,6 +389,8 @@ def _pending_tool_names(
     if not contract.dependencies_ready(goal.goal_key, evidence):
         return set()
     names: set[str] = set()
+    if goal.kind == GoalKind.GENERAL_RESPONSE:
+        names.add("check_place_line")
     if (
         goal.kind == GoalKind.ROUTE
         and contract.route_allows_internal_discovery(goal.goal_key)
@@ -498,6 +502,8 @@ def schemas_for_state(
 def tool_supports_goal(tool_name: str, goal_kind: GoalKind) -> bool:
     """Whether a model-visible capability may act on this outcome kind."""
 
+    if tool_name == "check_place_line":
+        return goal_kind == GoalKind.GENERAL_RESPONSE
     return tool_name in {
         _CAPABILITY_BY_GOAL.get(goal_kind),
         _PRESENTER_BY_GOAL.get(goal_kind),

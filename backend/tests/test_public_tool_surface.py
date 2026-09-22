@@ -79,6 +79,7 @@ class PublicToolSurfaceTests(unittest.TestCase):
             "declare_goals",
             "discover_places",
             "check_transit",
+            "check_place_line",
             "prepare_route_options",
             "present_places",
             "present_transit",
@@ -89,6 +90,7 @@ class PublicToolSurfaceTests(unittest.TestCase):
             "declare_goals",
             "discover_places",
             "check_transit",
+            "check_place_line",
             "prepare_route_options",
             "complete_turn",
         }

@@ -24,6 +24,7 @@ import app.services.agent.tools.declare_goals as declare_goals
 from app.services.agent.public_surface import offered_custom_tools
 from app.services.agent.tools.base import ToolContext, ToolResult
 from app.services.agent.tools.places import (
+    check_place_line,
     discover_places,
     place_reference,
     present_places,
@@ -104,6 +105,13 @@ def _prepare_route_options_label(tool_input: dict) -> str:
 def _present_route_label(tool_input: dict) -> str:
     del tool_input
     return "Presenting the recommended route…"
+
+
+def _check_place_line_label(tool_input: dict) -> str:
+    name = str(tool_input.get("venue_name") or "").strip()
+    if name:
+        return f"Checking the line at {name}…"
+    return "Checking the line…"
 
 
 def _discover_places_where(tool_input: dict) -> str:
@@ -325,6 +333,12 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         check_transit.execute,
         _check_transit_label,
         12.0,
+    ),
+    "check_place_line": _spec(
+        check_place_line.CHECK_PLACE_LINE_SCHEMA,
+        check_place_line.execute,
+        _check_place_line_label,
+        8.0,
     ),
     "prepare_route_options": _spec(
         prepare_route_options.PREPARE_ROUTE_OPTIONS_SCHEMA,

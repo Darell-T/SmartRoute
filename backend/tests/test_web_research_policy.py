@@ -69,7 +69,7 @@ class WebSearchPolicyTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 initial_evidence = TurnEvidence()
                 initial_tools = _state_tools(mode)
-                assert [tool.get("name") for tool in initial_tools] == ["declare_goals", "discover_places", "check_transit", "prepare_route_options", "complete_turn"]
+                assert [tool.get("name") for tool in initial_tools] == ["declare_goals", "discover_places", "check_transit", "check_place_line", "prepare_route_options", "complete_turn"]
                 assert not initial_evidence.may_offer_web()
 
                 search_evidence = TurnEvidence()
@@ -86,7 +86,7 @@ class WebSearchPolicyTests(unittest.TestCase):
                 )
                 names = [tool.get("name") for tool in tools]
                 assert names[-1] == "web_search"
-                assert names[:5] == ["declare_goals", "discover_places", "check_transit", "prepare_route_options", "complete_turn"]
+                assert names[:6] == ["declare_goals", "discover_places", "check_transit", "check_place_line", "prepare_route_options", "complete_turn"]
 
                 verify_evidence = TurnEvidence()
                 verify_evidence.note_discover_places(

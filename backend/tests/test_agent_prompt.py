@@ -113,9 +113,11 @@ class SystemPromptGuardTests(unittest.TestCase):
     def test_queue_evidence_stays_inside_existing_place_capabilities(self):
         assert "QUEUE EVIDENCE" in agent_prompt.SYSTEM_PROMPT
         normalized = " ".join(agent_prompt.SYSTEM_PROMPT.lower().split())
-        assert "not another capability" in normalized
+        assert "check_place_line" in normalized
+        assert "direct question about the wait or the line" in normalized
+        assert "not_monitored" in normalized
         assert "queue_context" in normalized
-        assert "present_places owns every rider-facing queue number" in normalized
+        assert "present_places owns every rider-facing queue number on a place shortlist" in normalized
         assert "damn_lines" not in normalized
         assert "never invent a global threshold" in normalized
         assert "join-now estimate" in normalized

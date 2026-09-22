@@ -54,6 +54,7 @@ _CAPABILITY_TOOLS = frozenset(
     {
         "discover_places",
         "check_transit",
+        "check_place_line",
         "prepare_route_options",
         "present_places",
         "present_transit",
@@ -72,6 +73,7 @@ _UNAVAILABLE_ACTION_SUMMARY = "That action is not available for this request"
 _PUBLIC_FAILURE_SUMMARIES = {
     "discover_places": "Place search could not be completed",
     "check_transit": "Transit information could not be checked",
+    "check_place_line": "The line could not be checked",
     "prepare_route_options": "Route options could not be prepared",
     "present_places": "Place results could not be shown",
     "present_transit": "Transit results could not be shown",
