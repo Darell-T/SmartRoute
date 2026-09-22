@@ -95,6 +95,10 @@ class ActivityCopyTests(unittest.TestCase):
             "The wait is about 11 minutes. Want a route? Or should I check another place?",
             outcome="answer",
         ) is None
+        assert validated_terminal_message(
+            "Want me to check how busy it might be when you arrive?",
+            outcome="answer",
+        ) is None
 
     def test_ordinary_terminal_message_allows_one_next_step_question(self) -> None:
         message = "The wait is about 11 minutes. Want me to route you there?"

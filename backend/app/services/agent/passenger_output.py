@@ -180,16 +180,27 @@ def validated_presentation_framing(
     return framing
 
 
+_UNSUPPORTED_OFFER_FRAGMENTS = (
+    " busy",
+    " crowd",
+    " monitor",
+    " keep an eye",
+    " let you know",
+    " notify",
+)
+
+
 def _has_unowned_continuation(message: str) -> bool:
     """Detect syntax that leaves an ordinary answer promising more work.
 
-    This is deliberately an output-contract check, not rider-intent parsing.
-    Questions belong to one next step in an answer, or to ``clarification``.
-    More than one question, and future first-person commitments, are rejected.
+    One next-step question is allowed. More than one question, a future
+    commitment, and an offer SmartRoute cannot perform are rejected.
     """
 
     normalized = " " + message.casefold().replace("\u2019", "'") + " "
     if normalized.count("?") > 1:
+        return True
+    if any(fragment in normalized for fragment in _UNSUPPORTED_OFFER_FRAGMENTS):
         return True
     if any(
         future_subject in normalized
