@@ -109,26 +109,38 @@ def _venue_for_place_id(ctx: ToolContext, place_id: str) -> damn_lines.Supported
     return damn_lines.get_supported_venue(provider_id)
 
 
-def _provider_id(session: dict | None, session_id: str, place_id: str) -> str:
+def _presented_provider_id(
+    session: dict | None, session_id: str, place_id: str
+) -> str:
     resolved, _, _ = discovery_store.resolve_presented_place_reference(
         session=session,
         session_id=session_id,
         place_id=place_id,
     )
-    if isinstance(resolved, dict):
-        provider_id = str(resolved.get("provider_place_id") or "").strip()
-        if provider_id:
-            return provider_id
-    set_id = public_surface.active_discovery_set_id(session, session_id=session_id)
-    record = (
-        discovery_store.load_discovery_set(set_id, session_id=session_id)
-        if set_id
-        else None
-    )
-    for place in (record or {}).get("places") or []:
+    if not isinstance(resolved, dict):
+        return ""
+    return str(resolved.get("provider_place_id") or "").strip()
+
+
+def _stored_provider_id(places: object, place_id: str) -> str:
+    if not isinstance(places, list):
+        return ""
+    for place in places:
         if str(place.get("place_id") or "") == place_id:
             return str(place.get("provider_place_id") or "").strip()
     return ""
+
+
+def _provider_id(session: dict | None, session_id: str, place_id: str) -> str:
+    presented = _presented_provider_id(session, session_id, place_id)
+    if presented:
+        return presented
+    set_id = public_surface.active_discovery_set_id(session, session_id=session_id)
+    if not set_id:
+        return ""
+    record = discovery_store.load_discovery_set(set_id, session_id=session_id)
+    places = record.get("places") if isinstance(record, dict) else None
+    return _stored_provider_id(places, place_id)
 
 
 def _payload(
@@ -146,6 +158,43 @@ def _payload(
     return payload
 
 
+def _venues_for_input(
+    tool_input: dict, ctx: ToolContext
+) -> tuple[tuple[damn_lines.SupportedVenue, ...], ToolResult | None]:
+    place_id = str(tool_input.get("place_id") or "").strip()
+    name = str(tool_input.get("venue_name") or "").strip()
+    if place_id:
+        venue = _venue_for_place_id(ctx, place_id)
+        found = (venue,) if venue is not None else ()
+        return found, None
+    if name:
+        area = str(tool_input.get("area") or "").strip()
+        return match_venues(name, area), None
+    return (), ToolResult(
+        ok=False,
+        error="venue_name or place_id is required",
+        internal_diagnostic=True,
+    )
+
+
+def _line_payload(
+    venue: damn_lines.SupportedVenue, current: damn_lines.CurrentQueueResult
+) -> dict[str, object]:
+    observation = current.observations.get(venue.google_place_id)
+    if observation is None or not current.provider_available:
+        return _payload("unavailable", venue)
+    data = _payload(
+        "ready",
+        venue,
+        observed_at=_clock(observation.captured_at),
+    )
+    if observation.wait_minutes is not None:
+        data["wait_minutes"] = observation.wait_minutes
+    if observation.people_count is not None:
+        data["people_count"] = observation.people_count
+    return data
+
+
 async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     _goal_key, goal_error = validated_goal_key(
         tool_input,
@@ -156,36 +205,13 @@ async def execute(tool_input: dict, ctx: ToolContext) -> ToolResult:
     if goal_error is not None:
         return goal_error
     del _goal_key
-    place_id = str(tool_input.get("place_id") or "").strip()
-    name = str(tool_input.get("venue_name") or "").strip()
-    area = str(tool_input.get("area") or "").strip()
-    if place_id:
-        venue = _venue_for_place_id(ctx, place_id)
-        venues = (venue,) if venue is not None else ()
-    elif name:
-        venues = match_venues(name, area)
-    else:
-        return ToolResult(
-            ok=False,
-            error="venue_name or place_id is required",
-            internal_diagnostic=True,
-        )
+    venues, error = _venues_for_input(tool_input, ctx)
+    if error is not None:
+        return error
     if not venues:
         return ToolResult(ok=True, data=_payload("not_monitored"))
     if len(venues) > 1:
-        return ToolResult(
-            ok=True,
-            data={"status": "ambiguous", "names": [venue.name for venue in venues]},
-        )
-    venue = venues[0]
-    current = await damn_lines.get_current_observations([venue.google_place_id])
-    observation = current.observations.get(venue.google_place_id)
-    if observation is None or not current.provider_available:
-        return ToolResult(ok=True, data=_payload("unavailable", venue))
-    data = _payload("ready", venue)
-    if observation.wait_minutes is not None:
-        data["wait_minutes"] = observation.wait_minutes
-    if observation.people_count is not None:
-        data["people_count"] = observation.people_count
-    data["observed_at"] = _clock(observation.captured_at)
-    return ToolResult(ok=True, data=data)
+        names = [venue.name for venue in venues]
+        return ToolResult(ok=True, data={"status": "ambiguous", "names": names})
+    current = await damn_lines.get_current_observations([venues[0].google_place_id])
+    return ToolResult(ok=True, data=_line_payload(venues[0], current))
