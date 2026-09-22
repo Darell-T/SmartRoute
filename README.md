@@ -8,7 +8,7 @@ live MTA feeds, alerts, and nearby incidents. The Agent understands the request
 and chooses among route options. The backend owns travel times, stops, transfers,
 and the rules that decide whether a route can run.
 
-<video src="docs/assets/smartroute-demo.mp4" width="100%" autoplay muted loop playsinline controls></video>
+![Trip from a line check to a route card](docs/assets/smartroute-demo.gif)
 
 ## How it works
 
